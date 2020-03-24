@@ -1,6 +1,6 @@
-<MODULE_NAME>
-<PYPI_NAME>
-<REPO_NAME>
-<RTD_NAME>
-<PROJECT_NAME>
-<SHORT_DESCRIPTION>
+alexandria
+alexandria
+alexandria
+alexandria
+Alexandria DHT
+Client for the Alexandria DHT network

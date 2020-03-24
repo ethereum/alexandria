@@ -1,7 +1,7 @@
-<PROJECT_NAME>
+Alexandria DHT
 ==============================
 
-<SHORT_DESCRIPTION>
+Client for the Alexandria DHT network
 
 Contents
 --------
@@ -9,7 +9,7 @@ Contents
 .. toctree::
     :maxdepth: 3
 
-    <MODULE_NAME>
+    alexandria
     release_notes
 
 
