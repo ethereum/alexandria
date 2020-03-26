@@ -9,6 +9,7 @@ extras_require = {
     'test': [
         "pytest==3.3.2",
         "pytest-xdist",
+        "pytest-trio==0.5.2",
         "tox>=2.9.1,<3",
     ],
     'lint': [
@@ -29,12 +30,16 @@ extras_require = {
         "twine",
         "ipython",
     ],
+    'factory': [
+        "factory-boy==2.12.0",
+    ],
 }
 
 extras_require['dev'] = (
     extras_require['dev'] +  # noqa: W504
     extras_require['test'] +  # noqa: W504
     extras_require['lint'] +  # noqa: W504
+    extras_require['factory'] +  # noqa: W504
     extras_require['doc']
 )
 
@@ -56,6 +61,13 @@ setup(
     include_package_data=True,
     install_requires=[
         "eth-utils>=1,<2",
+        "coincurve==10.0.0",
+        "eth-keys==0.3.1",
+        "async-service==0.1.0a7",
+        "trio==0.13.0",
+        "trio-typing==0.3.0",
+        "async-generator==1.10",
+
     ],
     python_requires='>=3.6, <4',
     extras_require=extras_require,
