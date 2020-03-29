@@ -87,11 +87,11 @@ class BaseSession(SessionAPI):
 #
 class SessionInitiator(BaseSession):
     async def handle_packet(self, packet: PacketAPI) -> None:
-        if self.session.is_handshake_complete:
+        if self.is_handshake_complete:
             raise NotImplementedError
-        elif self.session.is_before_handshake:
+        elif self.is_before_handshake:
             raise NotImplementedError
-        elif self.session.is_during_handshake:
+        elif self.is_during_handshake:
             raise NotImplementedError
         else:
             raise NotImplementedError
@@ -111,11 +111,13 @@ class SessionInitiator(BaseSession):
 #
 class SessionRecipient(BaseSession):
     async def handle_packet(self, packet: PacketAPI) -> None:
-        if self.session.is_handshake_complete:
+        if self.is_handshake_complete:
             raise NotImplementedError
-        elif self.session.is_before_handshake:
-            raise NotImplementedError
-        elif self.session.is_during_handshake:
+        elif self.is_before_handshake:
+            return HandshakePacket(
+                tag=compute_tag(self.local_node_id, self.remote_node_id),
+            )
+        elif self.is_during_handshake:
             raise NotImplementedError
         else:
             raise NotImplementedError

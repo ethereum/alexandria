@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 import ipaddress
-from typing import NamedTuple, Tuple, Type, TypeVar
+from typing import NamedTuple, Optional, Tuple, Type, TypeVar
 
 from async_service import ServiceAPI
 from eth_keys import keys
@@ -50,7 +50,7 @@ class SessionAPI(ABC):
         ...
 
     @abstractmethod
-    async def handle_packet(self, packet: PacketAPI) -> None:
+    async def handle_packet(self, packet: PacketAPI) -> Optional[PacketAPI]:
         ...
 
     @property

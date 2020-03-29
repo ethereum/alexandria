@@ -1,8 +1,5 @@
 import hashlib
 import logging
-from socket import (
-    inet_aton,
-)
 from types import TracebackType
 from typing import (
     Any,
@@ -39,10 +36,13 @@ async def _handle_inbound(socket: trio.socket.SocketType,
     async with send_channel:
         while True:
             data, (ip_address, port) = await socket.recvfrom(DATAGRAM_BUFFER_SIZE)
-            endpoint = Endpoint(inet_aton(ip_address), port)
+            endpoint = Endpoint(ip_address, port)
             incoming_datagram = Datagram(data, endpoint)
             logger.debug('Received datagram: %s', incoming_datagram)
-            await send_channel.send(incoming_datagram)
+            try:
+                await send_channel.send(incoming_datagram)
+            except trio.BrokenResourceError:
+                break
 
 
 async def _handle_outbound(socket: trio.socket.SocketType,
@@ -86,7 +86,6 @@ class AwaitableAsyncContextManager(Awaitable[TAwaitable],
         self._done = False
 
     def __await__(self) -> TAwaitable:
-        assert False
         result = self._awaitable.__await__()
         self._done = True
         return result
@@ -248,6 +247,10 @@ class Client(Service, ClientAPI):
                 async for datagram, endpoint in receive_channel:
                     packet = decode_packet(datagram)
                     remote_node_id = recover_source_id_from_tag(packet.tag, self.local_node_id)
-                    connection = await self._get_connection(remote_node_id, endpoint, is_initiator=False)
+                    connection = await self._get_connection(
+                        remote_node_id,
+                        endpoint,
+                        is_initiator=False,
+                    )
                     nursery.start_soon(connection.inbound_packet_send_channel.send, packet)
                     self.logger.debug('Received datagram from %s', endpoint)

@@ -49,7 +49,9 @@ class Connection(Service, ConnectionAPI):
                                       receive_channel: trio.abc.ReceiveChannel[PacketAPI]) -> None:
         async with receive_channel:
             async for packet in receive_channel:
-                await self.session._handle_packet(packet)
+                result = await self.session.handle_packet(packet)
+                if isinstance(result, PacketAPI):
+                    await self._outbound_packet_send_channel.send(result)
 
     async def send_packet(self, packet: PacketAPI) -> None:
         await self._outbound_packet_send_channel.send(packet)

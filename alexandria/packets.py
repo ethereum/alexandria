@@ -30,12 +30,11 @@ class HandshakePacket(PacketAPI):
         self.tag = tag
 
     def to_wire_bytes(self) -> bytes:
-        return b'handshake-packet'
+        return self.tag
 
     @classmethod
     def from_wire_bytes(cls: Type[TPacket], data: bytes) -> TPacket:
-        assert data == b'handshake-packet'
-        return HandshakePacket()
+        return HandshakePacket(data)
 
 
 class CompleteHandshakePacket(PacketAPI):
