@@ -12,8 +12,8 @@ except ImportError as err:
     ) from err
 
 
-from alexandria.client import Client, Endpoint, Node
-from alexandria.constants import KEY_BIT_SIZE, KEY_BYTE_SIZE
+from alexandria.client import Client, Endpoint
+from alexandria.constants import KEY_BYTE_SIZE
 
 
 def _mk_private_key_bytes() -> bytes:
@@ -53,14 +53,6 @@ class EndpointFactory(factory.Factory):
 
     ip_address = ipaddress.IPv4Address('127.0.0.1')
     port = factory.LazyFunction(get_open_port)
-
-
-class NodeFactory(factory.Factory):
-    class Meta:
-        model = Node
-
-    node_id = factory.LazyFunction(lambda: secrets.randbits(KEY_BIT_SIZE))
-    endpoint = factory.SubFactory(EndpointFactory)
 
 
 class ClientFactory(factory.Factory):

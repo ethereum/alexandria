@@ -1,36 +1,71 @@
 from abc import ABC, abstractmethod
 import ipaddress
-from typing import Tuple
+from typing import NamedTuple, Tuple, Type, TypeVar
 
-from eth_keys import keys
 from async_service import ServiceAPI
+from eth_keys import keys
+import trio
 
-from .typing import NodeID
+from .typing import NodeID, Tag
 
 
-class HandshakeParticipantAPI(ABC):
+class PacketAPI(ABC):
+    packet_id: int
+    tag: Tag
+
+    @abstractmethod
+    def to_wire_bytes(self) -> bytes:
+        ...
+
+    @classmethod
+    @abstractmethod
+    def from_wire_bytes(cls: Type['TPacket'], data: bytes) -> 'TPacket':
+        ...
+
+
+TPacket = TypeVar('TPacket', bound=PacketAPI)
+
+
+class Endpoint(NamedTuple):
+    ip_address: ipaddress.IPv4Address
+    port: int
+
+
+class Datagram(NamedTuple):
+    datagram: bytes
+    endpoint: Endpoint
+
+
+class MessageAPI(ABC):
+    ...
+
+
+class SessionAPI(ABC):
     @abstractmethod
     def __init__(self,
                  is_initiator: bool,
-                 local_private_key: bytes,
+                 local_private_key: keys.PrivateKey,
                  remote_node_id: NodeID,
                  ) -> None:
         ...
 
+    @abstractmethod
+    async def handle_packet(self, packet: PacketAPI) -> None:
+        ...
+
     @property
     @abstractmethod
-    def first_packet_to_send(self) -> Packet:
-        """The first packet we have to send the peer."""
+    def is_before_handshake(self) -> bool:
         ...
 
+    @property
     @abstractmethod
-    def is_response_packet(self, packet: Packet) -> bool:
-        """Check if the given packet is the response we need to complete the handshake."""
+    def is_handshake_complete(self) -> bool:
         ...
 
+    @property
     @abstractmethod
-    def complete_handshake(self, response_packet: Packet) -> HandshakeResult:
-        """Complete the handshake using a response packet received from the peer."""
+    def is_during_handshake(self) -> bool:
         ...
 
     @property
@@ -41,7 +76,7 @@ class HandshakeParticipantAPI(ABC):
 
     @property
     @abstractmethod
-    def local_private_key(self) -> bytes:
+    def private_key(self) -> keys.PrivateKey:
         """The static node key of this node."""
         ...
 
@@ -64,6 +99,17 @@ class HandshakeParticipantAPI(ABC):
         ...
 
 
+class ConnectionAPI(ABC):
+    inbound_packet_send_channel: trio.abc.SendChannel[PacketAPI]
+    outbound_packet_receive_channel: trio.abc.SendChannel[PacketAPI]
+
+    remote_endpoint: Endpoint
+
+    @abstractmethod
+    async def wait_ready(self) -> None:
+        ...
+
+
 class NodeAPI(ABC):
     id: NodeID
     address: ipaddress.IPv4Address
@@ -75,10 +121,18 @@ class NodeAPI(ABC):
         ...
 
 
-class ClientAPI(ServiceAPI):
+class EventsAPI(ServiceAPI):
     @abstractmethod
-    async def handshake(self, other: NodeAPI) -> None:
+    async def new_connection(self, connection: ConnectionAPI) -> None:
         ...
+
+    @abstractmethod
+    async def wait_new_connection(self) -> ConnectionAPI:
+        ...
+
+
+class ClientAPI(ServiceAPI):
+    events: EventsAPI
 
 
 class NodeDatabaseAPI(ABC):

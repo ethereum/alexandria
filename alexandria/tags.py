@@ -1,9 +1,5 @@
 import hashlib
 
-from p2p._utils import (
-    sxor,
-)
-
 from alexandria.typing import (
     NodeID,
     Tag,
@@ -19,7 +15,7 @@ def _sxor(s1: bytes, s2: bytes) -> bytes:
 def compute_tag(source_node_id: NodeID, destination_node_id: NodeID) -> Tag:
     """Compute the tag used in message packets sent between two nodes."""
     destination_node_id_hash = hashlib.sha256(destination_node_id.to_bytes(32, 'big')).digest()
-    tag = sxor(destination_node_id_hash, source_node_id.to_bytes(32, 'big'))
+    tag = _sxor(destination_node_id_hash, source_node_id.to_bytes(32, 'big'))
     return Tag(tag)
 
 
