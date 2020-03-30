@@ -25,8 +25,8 @@ async def test_client_connect(nursery):
 
         bob_endpoint = EndpointFactory(ip_address='127.0.0.1', port=bob.listen_on.port)
 
-        async with bob.events.wait_new_connection() as new_connection:
+        async with bob.events.wait_new_connection() as dial_in_from_alice:
             await alice.ping(bob.local_node_id, bob_endpoint)
-            with trio.fail_after(1):
-                bob_connection = await new_connection
-            assert bob_connection.session.remote_node_id == bob.local_node_id
+            with trio.fail_after(20):
+                alice_connection = await dial_in_from_alice
+            assert alice_connection.session.remote_node_id == alice.local_node_id

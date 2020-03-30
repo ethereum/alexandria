@@ -125,7 +125,7 @@ class NodeAPI(ABC):
         ...
 
 
-class EventsAPI(ServiceAPI):
+class EventsAPI(ABC):
     @abstractmethod
     async def new_connection(self, connection: ConnectionAPI) -> None:
         ...

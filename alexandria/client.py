@@ -8,6 +8,7 @@ from typing import (
     Awaitable,
     Mapping,
     Optional,
+    Set,
     Type,
     TypeVar,
 )
@@ -38,7 +39,7 @@ async def _handle_inbound(socket: trio.socket.SocketType,
             data, (ip_address, port) = await socket.recvfrom(DATAGRAM_BUFFER_SIZE)
             endpoint = Endpoint(ip_address, port)
             incoming_datagram = Datagram(data, endpoint)
-            logger.debug('Received datagram: %s', incoming_datagram)
+            logger.debug('handling inbound datagram: %s', incoming_datagram)
             try:
                 await send_channel.send(incoming_datagram)
             except trio.BrokenResourceError:
@@ -50,7 +51,7 @@ async def _handle_outbound(socket: trio.socket.SocketType,
                            ) -> None:
     async with receive_channel:
         async for datagram, endpoint in receive_channel:
-            logger.debug('Sending datagram: %s', (datagram, endpoint))
+            logger.debug('handling outbound datagram: %s', (datagram, endpoint))
             await socket.sendto(datagram, endpoint)
 
 
@@ -79,57 +80,84 @@ DEFAULT_LISTEN_ON = Endpoint('0.0.0.0', 8628)
 TAwaitable = TypeVar('TAwaitable', bound=Awaitable[Any])
 
 
-class AwaitableAsyncContextManager(Awaitable[TAwaitable],
-                                   AsyncContextManager[Awaitable[TAwaitable]]):
+class ReAwaitable(Awaitable[TAwaitable]):
+    _result: TAwaitable
+
     def __init__(self, awaitable: Awaitable[TAwaitable]) -> None:
         self._awaitable = awaitable
-        self._done = False
+
+    @property
+    def is_done(self) -> bool:
+        return hasattr(self, '_result')
 
     def __await__(self) -> TAwaitable:
-        result = self._awaitable.__await__()
-        self._done = True
-        return result
+        if not self.is_done:
+            self._result = self._awaitable.__await__()
+        return self._result
+
+
+class EventSubscription(Awaitable[TAwaitable], AsyncContextManager[Awaitable[TAwaitable]]):
+    def __init__(self,
+                 on_enter: Awaitable[None],
+                 get_result: Awaitable[TAwaitable],
+                 on_exit: Awaitable[None],
+                 ) -> None:
+        self._on_enter = on_enter
+        self._get_result = ReAwaitable(get_result)
+        self._on_exit = on_exit
+
+    def __await__(self) -> TAwaitable:
+        return self._do_await.__await__()
+
+    async def _do_await(self) -> TAwaitable:
+        async with self:
+            return await self._get_result
 
     async def __aenter__(self) -> Awaitable[TAwaitable]:
         await trio.hazmat.checkpoint()
-        return self
+        await self._on_enter
+        return self._get_result
 
     async def __aexit__(self,
                         exc_type: Optional[Type[BaseException]],
                         exc_value: Optional[BaseException],
                         traceback: Optional[TracebackType],
                         ) -> None:
-        await trio.hazmat.checkpoint()
-        if exc_type is None and not self._done:
-            await self
+        if exc_type is None and not self._get_result.is_done:
+            await self._get_result
+        await self._on_exit
 
 
-class Events(Service, EventsAPI):
+class Events(EventsAPI):
+    logger = logging.getLogger('alexandra.client.Events')
+    _new_connection_send_channels: Set[trio.abc.SendChannel[ConnectionAPI]]
+
     def __init__(self) -> None:
-        self._new_connection_channels = trio.open_memory_channel[ConnectionAPI](0)
-
-    async def run(self):
-        self.manager.run_daemon_task(self._consume_new_connection)
-        await self.manager.wait_finished()
-
-    async def _consume_new_connection(self):
-        send_channel, receive_channel = self._new_connection_channels
-        async with send_channel:
-            async with receive_channel:
-                async for _ in receive_channel:  # noqa: F841
-                    pass
+        self._new_connection_send_channels = set()
+        self._new_connection_lock = trio.Lock()
 
     async def new_connection(self, connection: ConnectionAPI) -> None:
-        await self._new_connection_channels[0].send(connection)
+        self.logger.warning('events:NEW_CONNECTION.triggering: %s', id(self))
+        async with self._new_connection_lock:
+            for send_channel in self._new_connection_send_channels:
+                await send_channel.send(connection)
 
-    def wait_new_connection(self) -> AwaitableAsyncContextManager[ConnectionAPI]:
-        receive_channel = self._new_connection_channels[1].clone()
+    def wait_new_connection(self) -> EventSubscription[ConnectionAPI]:
+        send_channel, receive_channel = trio.open_memory_channel[ConnectionAPI](0)
 
-        async def get_value():
+        async def on_enter():
+            async with self._new_connection_lock:
+                self._new_connection_send_channels.add(send_channel)
+
+        async def get_result():
             async with receive_channel:
                 return await receive_channel.receive()
 
-        return AwaitableAsyncContextManager(get_value())
+        async def on_exit():
+            async with self._new_connection_lock:
+                self._new_connection_send_channels.remove(send_channel)
+
+        return EventSubscription(on_enter(), get_result(), on_exit())
 
 
 def sha256(data: bytes) -> bytes:
@@ -137,7 +165,7 @@ def sha256(data: bytes) -> bytes:
 
 
 class Client(Service, ClientAPI):
-    logger = logging.getLogger('alexandria.Client')
+    logger = logging.getLogger('alexandria.client.Client')
 
     _connections: Mapping[NodeID, ConnectionAPI]
 
@@ -165,7 +193,6 @@ class Client(Service, ClientAPI):
         self._outbound_datagram_send_channel = outbound_channels[0]
 
         async with listen(self.listen_on, inbound_channels[0], outbound_channels[1]):
-            self.manager.run_daemon_child_service(self.events)
             self.manager.run_daemon_task(self._handle_inbound_datagrams, inbound_channels[1])
             self._listening.set()
             self.logger.info(
@@ -202,6 +229,7 @@ class Client(Service, ClientAPI):
                         encode_packet(packet),
                         connection.remote_endpoint,
                     ))
+                    self.logger.debug('Dispatching outbound packet from %s', connection)
         finally:
             async with self._connections_lock:
                 self._connections.pop(remote_node_id)
@@ -215,20 +243,24 @@ class Client(Service, ClientAPI):
             if remote_node_id in self._connections:
                 return self._connections[remote_node_id]
             else:
+                inbound_channels = trio.open_memory_channel[PacketAPI](0)
+                outbound_channels = trio.open_memory_channel[PacketAPI](0)
+
                 if is_initiator:
                     session = SessionInitiator(
                         is_initiator=True,
                         private_key=self._private_key,
                         remote_node_id=remote_node_id,
+                        outbound_packet_send_channel=outbound_channels[0],
                     )
                 else:
                     session = SessionRecipient(
-                        is_initiator=True,
+                        is_initiator=False,
                         private_key=self._private_key,
                         remote_node_id=remote_node_id,
+                        outbound_packet_send_channel=outbound_channels[0],
                     )
-                inbound_channels = trio.open_memory_channel[PacketAPI](0)
-                outbound_channels = trio.open_memory_channel[PacketAPI](0)
+
                 connection = Connection(
                     session=session,
                     remote_endpoint=remote_endpoint,
@@ -253,4 +285,4 @@ class Client(Service, ClientAPI):
                         is_initiator=False,
                     )
                     nursery.start_soon(connection.inbound_packet_send_channel.send, packet)
-                    self.logger.debug('Received datagram from %s', endpoint)
+                    self.logger.debug('Dispatching inbound packet to %s', connection)

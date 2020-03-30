@@ -49,14 +49,10 @@ class Connection(Service, ConnectionAPI):
                                       receive_channel: trio.abc.ReceiveChannel[PacketAPI]) -> None:
         async with receive_channel:
             async for packet in receive_channel:
-                result = await self.session.handle_inbound_packet(packet)
-                if isinstance(result, PacketAPI):
-                    await self._outbound_packet_send_channel.send(result)
+                await self.session.handle_inbound_packet(packet)
 
     async def send_packet(self, packet: PacketAPI) -> None:
-        await self._outbound_packet_send_channel.send(
-            await self.session.handle_outbound_packet(packet)
-        )
+        await self.session.handle_outbound_packet(packet)
 
     async def send_message(self, message: MessageAPI) -> None:
         raise NotImplementedError
