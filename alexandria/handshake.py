@@ -1,3 +1,4 @@
+import hashlib
 from typing import (
     NamedTuple,
     NewType,
@@ -12,7 +13,7 @@ import coincurve
 
 from eth_keys import keys
 
-from alexandria.constants import HKDF_INFO, AES128_KEY_SIZE
+from alexandria.constants import ID_NONCE_SIGNATURE_PREFIX, HKDF_INFO, AES128_KEY_SIZE
 from alexandria.typing import NodeID, IDNonce
 
 
@@ -74,11 +75,11 @@ def compute_session_keys(*,
                          local_node_id: NodeID,
                          remote_node_id: NodeID,
                          id_nonce: IDNonce,
-                         is_locally_initiated: bool
+                         is_initiator: bool
                          ) -> SessionKeys:
     secret = ecdh_agree(local_private_key, remote_public_key)
 
-    if is_locally_initiated:
+    if is_initiator:
         initiator_node_id, recipient_node_id = local_node_id, remote_node_id
     else:
         initiator_node_id, recipient_node_id = remote_node_id, local_node_id
@@ -90,7 +91,7 @@ def compute_session_keys(*,
         id_nonce,
     )
 
-    if is_locally_initiated:
+    if is_initiator:
         encryption_key, decryption_key = initiator_key, recipient_key
     else:
         encryption_key, decryption_key = recipient_key, initiator_key
@@ -100,3 +101,26 @@ def compute_session_keys(*,
         decryption_key=AES128Key(decryption_key),
         auth_response_key=AES128Key(auth_response_key),
     )
+
+
+def create_id_nonce_signature_input(id_nonce: IDNonce,
+                                    ephemeral_public_key: keys.PublicKey,
+                                    ) -> bytes:
+    preimage = b"".join((
+        ID_NONCE_SIGNATURE_PREFIX,
+        id_nonce,
+        ephemeral_public_key.to_compressed_bytes(),
+    ))
+    return hashlib.sha256(preimage).digest()
+
+
+def create_id_nonce_signature(id_nonce: IDNonce,
+                              ephemeral_public_key: keys.PublicKey,
+                              private_key: keys.PrivateKey,
+                              ) -> bytes:
+    signature_input = create_id_nonce_signature_input(
+        id_nonce=id_nonce,
+        ephemeral_public_key=ephemeral_public_key,
+    )
+    signature = private_key.sign_msg_hash_non_recoverable(signature_input)
+    return bytes(signature)

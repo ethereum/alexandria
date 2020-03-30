@@ -23,10 +23,11 @@ from eth_utils import humanize_hash
 from alexandria.abc import ClientAPI, ConnectionAPI, Datagram, Endpoint, EventsAPI, PacketAPI
 from alexandria.connection import Connection
 from alexandria.constants import DATAGRAM_BUFFER_SIZE
-from alexandria.packets import encode_packet, decode_packet, MessagePacket
+from alexandria.messages import Ping
+from alexandria.packets import encode_packet, decode_packet
 from alexandria.session import SessionInitiator, SessionRecipient
 from alexandria.typing import NodeID
-from alexandria.tags import recover_source_id_from_tag, compute_tag
+from alexandria.tags import recover_source_id_from_tag
 
 
 logger = logging.getLogger('alexandria.datagrams')
@@ -204,10 +205,9 @@ class Client(Service, ClientAPI):
             await self.manager.wait_finished()
 
     async def ping(self, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
-        # message = Ping()
-        packet = MessagePacket(tag=compute_tag(self.local_node_id, remote_node_id))
+        message = Ping()
         connection = await self._get_connection(remote_node_id, remote_endpoint, is_initiator=True)
-        await connection.send_packet(packet)
+        await connection.send_message(message)
 
     async def _manage_connection(self, connection: ConnectionAPI):
         """

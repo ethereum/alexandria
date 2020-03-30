@@ -55,4 +55,4 @@ class Connection(Service, ConnectionAPI):
         await self.session.handle_outbound_packet(packet)
 
     async def send_message(self, message: MessageAPI) -> None:
-        raise NotImplementedError
+        await self.session.send_message(message)

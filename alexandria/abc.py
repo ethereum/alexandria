@@ -50,6 +50,10 @@ class SessionAPI(ABC):
         ...
 
     @abstractmethod
+    async def handle_outbound_message(self, message: MessageAPI) -> None:
+        ...
+
+    @abstractmethod
     async def handle_inbound_packet(self, packet: PacketAPI) -> Optional[PacketAPI]:
         ...
 
@@ -111,6 +115,10 @@ class ConnectionAPI(ABC):
 
     @abstractmethod
     async def wait_ready(self) -> None:
+        ...
+
+    @abstractmethod
+    async def send_message(self, message: MessageAPI) -> None:
         ...
 
 
