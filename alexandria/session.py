@@ -1,5 +1,6 @@
 import enum
 import hashlib
+from typing import Optional
 
 from eth_keys import keys
 
@@ -86,11 +87,28 @@ class BaseSession(SessionAPI):
 # Initiator
 #
 class SessionInitiator(BaseSession):
-    async def handle_packet(self, packet: PacketAPI) -> None:
+    async def handle_inbound_packet(self, packet: PacketAPI) -> Optional[PacketAPI]:
         if self.is_handshake_complete:
             raise NotImplementedError
         elif self.is_before_handshake:
             raise NotImplementedError
+        elif self.is_during_handshake:
+            if not isinstance(packet, HandshakePacket):
+                raise Exception(f"Unhandled packet type: {type(packet)}")
+            self._status = SessionStatus.AFTER
+            return CompleteHandshakePacket(
+                tag=compute_tag(self.local_node_id, self.remote_node_id),
+            )
+        else:
+            raise NotImplementedError
+
+    async def handle_outbound_packet(self, packet: PacketAPI) -> PacketAPI:
+        if self.is_handshake_complete:
+            raise NotImplementedError
+        elif self.is_before_handshake:
+            self._status = SessionStatus.DURING
+            return packet
+
         elif self.is_during_handshake:
             raise NotImplementedError
         else:
@@ -110,13 +128,29 @@ class SessionInitiator(BaseSession):
 # Receipient
 #
 class SessionRecipient(BaseSession):
-    async def handle_packet(self, packet: PacketAPI) -> None:
+    async def handle_inbound_packet(self, packet: PacketAPI) -> Optional[PacketAPI]:
         if self.is_handshake_complete:
             raise NotImplementedError
         elif self.is_before_handshake:
+            self._status = SessionStatus.DURING
             return HandshakePacket(
                 tag=compute_tag(self.local_node_id, self.remote_node_id),
             )
+        elif self.is_during_handshake:
+            if not isinstance(packet, CompleteHandshakePacket):
+                raise Exception(f"Packet type not handled: {type(packet)}")
+            self._status = SessionStatus.AFTER
+            # TODO: session keys
+            # TODO: more stuff....?
+            raise NotImplementedError
+        else:
+            raise NotImplementedError
+
+    async def handle_outbound_packet(self, packet: PacketAPI) -> PacketAPI:
+        if self.is_handshake_complete:
+            raise NotImplementedError
+        elif self.is_before_handshake:
+            raise NotImplementedError
         elif self.is_during_handshake:
             raise NotImplementedError
         else:

@@ -50,7 +50,11 @@ class SessionAPI(ABC):
         ...
 
     @abstractmethod
-    async def handle_packet(self, packet: PacketAPI) -> Optional[PacketAPI]:
+    async def handle_inbound_packet(self, packet: PacketAPI) -> Optional[PacketAPI]:
+        ...
+
+    @abstractmethod
+    async def handle_outbound_packet(self, packet: PacketAPI) -> PacketAPI:
         ...
 
     @property

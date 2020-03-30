@@ -179,7 +179,7 @@ class Client(Service, ClientAPI):
     async def ping(self, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
         # message = Ping()
         packet = MessagePacket(tag=compute_tag(self.local_node_id, remote_node_id))
-        connection = await self._get_connection(remote_node_id, remote_endpoint, is_initiator=False)
+        connection = await self._get_connection(remote_node_id, remote_endpoint, is_initiator=True)
         await connection.send_packet(packet)
 
     async def _manage_connection(self, connection: ConnectionAPI):
