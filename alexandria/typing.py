@@ -1,6 +1,8 @@
 from typing import NewType
 
 
+AES128Key = NewType("AES128Key", bytes)
+
 NodeID = NewType('NodeID', int)
 
 Tag = NewType("Tag", bytes)

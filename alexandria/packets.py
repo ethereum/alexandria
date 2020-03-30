@@ -24,7 +24,8 @@ class AuthHeader(NamedTuple):
     auth_tag: Nonce
     id_nonce: IDNonce
     auth_scheme_name: bytes
-    ephemeral_public_key: bytes
+    ephemeral_public_key: keys.PublicKey
+    public_key: keys.PublicKey
     encrypted_auth_response: bytes
 
 
@@ -54,7 +55,8 @@ class CompleteHandshakePacket(PacketAPI):
                 initiator_key: AES128Key,
                 id_nonce_signature: bytes,
                 auth_response_key: AES128Key,
-                ephemeral_public_key: bytes,
+                ephemeral_public_key: keys.PublicKey,
+                public_key: keys.PublicKey,
                 ) -> TPacket:
         encrypted_auth_response = compute_encrypted_auth_response(
             auth_response_key=auth_response_key,
@@ -65,6 +67,7 @@ class CompleteHandshakePacket(PacketAPI):
             id_nonce=id_nonce,
             auth_scheme_name=AUTH_SCHEME_NAME,
             ephemeral_public_key=ephemeral_public_key,
+            public_key=public_key,
             encrypted_auth_response=encrypted_auth_response,
         )
 
@@ -82,6 +85,7 @@ class CompleteHandshakePacket(PacketAPI):
         )
 
     def to_wire_bytes(self) -> bytes:
+        raise NotImplementedError
         return b''.join((
             self.tag,
             ...,
@@ -90,7 +94,7 @@ class CompleteHandshakePacket(PacketAPI):
 
     @classmethod
     def from_wire_bytes(cls: Type[TPacket], data: bytes) -> TPacket:
-        return cls(data)
+        raise NotImplementedError
 
 
 class HandshakeResponse(PacketAPI):
@@ -232,7 +236,7 @@ def compute_encrypted_message(key: AES128Key,
 
 
 def compute_handshake_response_magic(destination_node_id: NodeID) -> Hash32:
-    preimage = destination_node_id + HANDSHAKE_RESPONSE_MAGIC_SUFFIX
+    preimage = destination_node_id.to_bytes(32, 'big') + HANDSHAKE_RESPONSE_MAGIC_SUFFIX
     return Hash32(hashlib.sha256(preimage).digest())
 
 

@@ -7,7 +7,7 @@ from eth_utils import ValidationError
 import trio
 
 from alexandria.abc import MessageAPI, PacketAPI, SessionAPI
-from alexandria.exceptions import HandshakeFailure
+from alexandria.exceptions import HandshakeFailure, DecryptionError
 from alexandria.handshake import compute_session_keys, create_id_nonce_signature, SessionKeys
 from alexandria.packets import (
     MessagePacket,
@@ -16,7 +16,7 @@ from alexandria.packets import (
     get_random_auth_tag,
     get_random_encrypted_data,
     get_random_id_nonce,
-    compute_who_are_you_magic,
+    compute_handshake_response_magic,
 )
 from alexandria.tags import compute_tag, recover_source_id_from_tag
 from alexandria.typing import NodeID, Tag, AES128Key, IDNonce
@@ -107,7 +107,7 @@ class SessionInitiator(BaseSession):
     #
     # Message API
     #
-    async def send_message(self, message: MessageAPI) -> None:
+    async def handle_outbound_message(self, message: MessageAPI) -> None:
         if self.is_handshake_complete:
             # TODO: construct MessagePacket
             raise NotImplementedError
@@ -157,7 +157,7 @@ class SessionInitiator(BaseSession):
         self._initiating_packet = MessagePacket(
             tag=self.tag,
             auth_tag=get_random_auth_tag(),
-            random_data=get_random_encrypted_data(),
+            encrypted_message=get_random_encrypted_data(),
         )
         await self._outbound_packet_send_channel.send(self._initiating_packet)
 
@@ -199,6 +199,7 @@ class SessionInitiator(BaseSession):
             id_nonce_signature=id_nonce_signature,
             auth_response_key=session_keys.auth_response_key,
             ephemeral_public_key=session_keys.private_key.public_key,
+            public_key=self.local_private_key.public_key,
         )
         await self._outbound_packet_send_channel.send(auth_header_packet)
 
@@ -229,7 +230,7 @@ class SessionRecipient(BaseSession):
         elif self.is_before_handshake:
             if isinstance(packet, MessagePacket):
                 await self.receive_handshake_initiation(packet)
-                await self.send_handshake_response()
+                await self.send_handshake_response(packet)
             else:
                 # TODO: full buffer handling
                 self._inbound_packet_buffer_channels.send_nowait(packet)
@@ -252,13 +253,13 @@ class SessionRecipient(BaseSession):
         self._status = SessionStatus.DURING
 
     async def send_handshake_response(self, initiation_packet: MessagePacket) -> None:
-        magic = compute_who_are_you_magic(self.remote_node_id)
+        magic = compute_handshake_response_magic(self.remote_node_id)
         response_packet = HandshakeResponse(
             tag=self.tag,
             magic=magic,
             token=initiation_packet.auth_tag,
             id_nonce=get_random_id_nonce(),
-            public_key=self.public_key,
+            public_key=self.private_key.public_key,
         )
         await self._outbound_packet_send_channel.send(response_packet)
 
@@ -272,7 +273,7 @@ class SessionRecipient(BaseSession):
                 f"Remote node ids do not match: {remote_node_id} != {self.remote_node_id}"
             )
 
-        ephemeral_public_key = packet.auth_header.ephemeral_public_key
+        ephemeral_public_key = packet.header.ephemeral_public_key
         try:
             keys.PublicKey(ephemeral_public_key)
         except Exception as err:
@@ -305,7 +306,7 @@ class SessionRecipient(BaseSession):
                                            id_nonce: IDNonce,
                                            ) -> None:
         try:
-            id_nonce_signature, enr = auth_header_packet.decrypt_auth_response(auth_response_key)
+            id_nonce_signature = auth_header_packet.decrypt_auth_response(auth_response_key)
         except DecryptionError as error:
             raise HandshakeFailure("Unable to decrypt auth response") from error
         except ValidationError as error:
@@ -315,8 +316,8 @@ class SessionRecipient(BaseSession):
             self.identity_scheme.validate_id_nonce_signature(
                 signature=id_nonce_signature,
                 id_nonce=id_nonce,
-                ephemeral_public_key=auth_header_packet.auth_header.ephemeral_public_key,
-                public_key=current_remote_enr.public_key,
+                ephemeral_public_key=auth_header_packet.header.ephemeral_public_key,
+                public_key=auth_header_packet.header.public_key,
             )
         except ValidationError as error:
             raise HandshakeFailure("Invalid id nonce signature in auth response") from error

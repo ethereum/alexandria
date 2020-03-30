@@ -205,7 +205,7 @@ class Client(Service, ClientAPI):
             await self.manager.wait_finished()
 
     async def ping(self, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
-        message = Ping()
+        message = Ping(id=1)
         connection = await self._get_connection(remote_node_id, remote_endpoint, is_initiator=True)
         await connection.send_message(message)
 
