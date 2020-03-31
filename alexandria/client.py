@@ -1,164 +1,38 @@
 import hashlib
 import logging
-from types import TracebackType
 from typing import (
-    Any,
-    AsyncContextManager,
-    AsyncIterable,
-    Awaitable,
     Mapping,
-    Optional,
-    Set,
     Type,
-    TypeVar,
 )
 
-from async_generator import asynccontextmanager
+from ssz import sedes
 import trio
 
 from async_service import Service
 from eth_keys import keys
 from eth_utils import humanize_hash
 
-from alexandria.abc import ClientAPI, ConnectionAPI, Datagram, Endpoint, EventsAPI, PacketAPI
-from alexandria.connection import Connection
-from alexandria.constants import DATAGRAM_BUFFER_SIZE
-from alexandria.messages import Ping
+from alexandria.abc import (
+    ClientAPI,
+    Datagram,
+    Endpoint,
+    MessageAPI,
+    PacketAPI,
+    TPayload,
+    SessionAPI,
+    SubscriptionAPI,
+)
+from alexandria.datagrams import listen
+from alexandria.events import Events
+from alexandria.messages import Message, Ping
 from alexandria.packets import encode_packet, decode_packet
 from alexandria.session import SessionInitiator, SessionRecipient
+from alexandria.subscriptions import SubscriptionManager
 from alexandria.typing import NodeID
 from alexandria.tags import recover_source_id_from_tag
 
 
-logger = logging.getLogger('alexandria.datagrams')
-
-
-async def _handle_inbound(socket: trio.socket.SocketType,
-                          send_channel: trio.abc.SendChannel[Datagram]) -> None:
-    async with send_channel:
-        while True:
-            data, (ip_address, port) = await socket.recvfrom(DATAGRAM_BUFFER_SIZE)
-            endpoint = Endpoint(ip_address, port)
-            incoming_datagram = Datagram(data, endpoint)
-            logger.debug('handling inbound datagram: %s', incoming_datagram)
-            try:
-                await send_channel.send(incoming_datagram)
-            except trio.BrokenResourceError:
-                break
-
-
-async def _handle_outbound(socket: trio.socket.SocketType,
-                           receive_channel: trio.abc.SendChannel[Datagram],
-                           ) -> None:
-    async with receive_channel:
-        async for datagram, endpoint in receive_channel:
-            logger.debug('handling outbound datagram: %s', (datagram, endpoint))
-            await socket.sendto(datagram, endpoint)
-
-
-@asynccontextmanager
-async def listen(endpoint: Endpoint,
-                 incoming_datagram_send_channel: trio.abc.SendChannel[Datagram],
-                 outbound_datagram_receive_channel: trio.abc.ReceiveChannel[Datagram],
-                 ) -> AsyncIterable[None]:
-    socket = trio.socket.socket(
-        family=trio.socket.AF_INET,
-        type=trio.socket.SOCK_DGRAM,
-    )
-    ip_address, port = endpoint
-    await socket.bind((str(ip_address), port))
-
-    async with trio.open_nursery() as nursery:
-        logger.debug('Datagram listener started on %s:%s', ip_address, port)
-        nursery.start_soon(_handle_inbound, socket, incoming_datagram_send_channel)
-        nursery.start_soon(_handle_outbound, socket, outbound_datagram_receive_channel)
-        yield
-
-
 DEFAULT_LISTEN_ON = Endpoint('0.0.0.0', 8628)
-
-
-TAwaitable = TypeVar('TAwaitable', bound=Awaitable[Any])
-
-
-class ReAwaitable(Awaitable[TAwaitable]):
-    _result: TAwaitable
-
-    def __init__(self, awaitable: Awaitable[TAwaitable]) -> None:
-        self._awaitable = awaitable
-
-    @property
-    def is_done(self) -> bool:
-        return hasattr(self, '_result')
-
-    def __await__(self) -> TAwaitable:
-        if not self.is_done:
-            self._result = self._awaitable.__await__()
-        return self._result
-
-
-class EventSubscription(Awaitable[TAwaitable], AsyncContextManager[Awaitable[TAwaitable]]):
-    def __init__(self,
-                 on_enter: Awaitable[None],
-                 get_result: Awaitable[TAwaitable],
-                 on_exit: Awaitable[None],
-                 ) -> None:
-        self._on_enter = on_enter
-        self._get_result = ReAwaitable(get_result)
-        self._on_exit = on_exit
-
-    def __await__(self) -> TAwaitable:
-        return self._do_await.__await__()
-
-    async def _do_await(self) -> TAwaitable:
-        async with self:
-            return await self._get_result
-
-    async def __aenter__(self) -> Awaitable[TAwaitable]:
-        await trio.hazmat.checkpoint()
-        await self._on_enter
-        return self._get_result
-
-    async def __aexit__(self,
-                        exc_type: Optional[Type[BaseException]],
-                        exc_value: Optional[BaseException],
-                        traceback: Optional[TracebackType],
-                        ) -> None:
-        if exc_type is None and not self._get_result.is_done:
-            await self._get_result
-        await self._on_exit
-
-
-class Events(EventsAPI):
-    logger = logging.getLogger('alexandra.client.Events')
-    _new_connection_send_channels: Set[trio.abc.SendChannel[ConnectionAPI]]
-
-    def __init__(self) -> None:
-        self._new_connection_send_channels = set()
-        self._new_connection_lock = trio.Lock()
-
-    async def new_connection(self, connection: ConnectionAPI) -> None:
-        self.logger.warning('events:NEW_CONNECTION.triggering: %s', id(self))
-        async with self._new_connection_lock:
-            for send_channel in self._new_connection_send_channels:
-                await send_channel.send(connection)
-
-    def wait_new_connection(self) -> EventSubscription[ConnectionAPI]:
-        send_channel, receive_channel = trio.open_memory_channel[ConnectionAPI](0)
-
-        async def on_enter():
-            async with self._new_connection_lock:
-                self._new_connection_send_channels.add(send_channel)
-
-        async def get_result():
-            async with receive_channel:
-                return await receive_channel.receive()
-
-        async def on_exit():
-            async with self._new_connection_lock:
-                self._new_connection_send_channels.remove(send_channel)
-
-        return EventSubscription(on_enter(), get_result(), on_exit())
 
 
 def sha256(data: bytes) -> bytes:
@@ -168,7 +42,7 @@ def sha256(data: bytes) -> bytes:
 class Client(Service, ClientAPI):
     logger = logging.getLogger('alexandria.client.Client')
 
-    _connections: Mapping[NodeID, ConnectionAPI]
+    _sessions: Mapping[NodeID, SessionAPI]
 
     def __init__(self,
                  private_key: keys.PrivateKey,
@@ -180,8 +54,7 @@ class Client(Service, ClientAPI):
         # self.routing_table = RoutingTable(self.local_node_id)
         self.listen_on = listen_on
         self._listening = trio.Event()
-        self._connections = {}
-        self._connections_lock = trio.Lock()
+        self._sessions = {}
         self.events = Events()
 
     async def wait_listening(self) -> None:
@@ -191,10 +64,17 @@ class Client(Service, ClientAPI):
         inbound_channels = trio.open_memory_channel[Datagram](0)
         outbound_channels = trio.open_memory_channel[Datagram](0)
 
+        inbound_message_channels = trio.open_memory_channel[MessageAPI[sedes.Serializable]](256)
+        self._inbound_message_send_channel = inbound_message_channels[0]
+        self._subscription_manager = SubscriptionManager(inbound_message_channels[1])
+
         self._outbound_datagram_send_channel = outbound_channels[0]
 
         async with listen(self.listen_on, inbound_channels[0], outbound_channels[1]):
             self.manager.run_daemon_task(self._handle_inbound_datagrams, inbound_channels[1])
+            # Run the subscription manager with gets fed all decoded inbound
+            # messages and dispatches them to individual subscriptions.
+            self.manager.run_daemon_child_service(self._subscription_manager)
             self._listening.set()
             self.logger.info(
                 'Client running: %s@%s:%s',
@@ -204,74 +84,73 @@ class Client(Service, ClientAPI):
             )
             await self.manager.wait_finished()
 
-    async def ping(self, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
-        message = Ping(id=1)
-        connection = await self._get_connection(remote_node_id, remote_endpoint, is_initiator=True)
-        await connection.send_message(message)
+    def subscribe(self, payload_type: Type[TPayload]) -> SubscriptionAPI[MessageAPI[TPayload]]:
+        return self._subscription_manager.subscribe(payload_type)
 
-    async def _manage_connection(self, connection: ConnectionAPI):
-        """
-        - run the connection as a child service.
-        """
-        self.manager.run_child_service(connection)
+    async def ping(self, ping_id: int, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
+        payload = Ping(id=ping_id)
+        message = Message(
+            payload=payload,
+            node_id=remote_node_id,
+            endpoint=remote_endpoint,
+        )
+        session = self._get_session(remote_node_id, remote_endpoint, is_initiator=True)
+        await session.handle_outbound_message(message)
 
-        remote_node_id = connection.session.remote_node_id
-        self._connections[remote_node_id] = connection
-        # signal that a new connection was made.
-        await self.events.new_connection(connection)
+    async def _manage_session(self,
+                              session: SessionAPI,
+                              receive_channel: trio.abc.ReceiveChannel[PacketAPI]):
+        if session.remote_node_id not in self._sessions:
+            raise Exception("Session not found in managed session")
 
-        outbound_packet_receive_channel = connection.outbound_packet_receive_channel
+        # signal that a new session was made.
+        await self.events.new_session(session)
 
         try:
-            async with outbound_packet_receive_channel:
-                async for packet in outbound_packet_receive_channel:
+            async with receive_channel:
+                async for packet in receive_channel:
                     await self._outbound_datagram_send_channel.send(Datagram(
                         encode_packet(packet),
-                        connection.remote_endpoint,
+                        session.remote_endpoint,
                     ))
-                    self.logger.debug('Dispatching outbound packet from %s', connection)
+                    self.logger.debug('Dispatching outbound packet from %s', session)
         finally:
-            async with self._connections_lock:
-                self._connections.pop(remote_node_id)
+            self._sessions.pop(session.remote_node_id)
 
-    async def _get_connection(self,
-                              remote_node_id: NodeID,
-                              remote_endpoint: Endpoint,
-                              *,
-                              is_initiator: bool) -> Connection:
-        async with self._connections_lock:
-            if remote_node_id in self._connections:
-                return self._connections[remote_node_id]
-            else:
-                inbound_channels = trio.open_memory_channel[PacketAPI](0)
-                outbound_channels = trio.open_memory_channel[PacketAPI](0)
+    def _get_session(self,
+                     remote_node_id: NodeID,
+                     remote_endpoint: Endpoint,
+                     *,
+                     is_initiator: bool) -> SessionAPI:
+        if remote_node_id in self._sessions:
+            return self._sessions[remote_node_id]
+        else:
+            outbound_channels = trio.open_memory_channel[PacketAPI](0)
 
-                if is_initiator:
-                    session = SessionInitiator(
-                        is_initiator=True,
-                        private_key=self._private_key,
-                        remote_node_id=remote_node_id,
-                        outbound_packet_send_channel=outbound_channels[0],
-                    )
-                else:
-                    session = SessionRecipient(
-                        is_initiator=False,
-                        private_key=self._private_key,
-                        remote_node_id=remote_node_id,
-                        outbound_packet_send_channel=outbound_channels[0],
-                    )
-
-                connection = Connection(
-                    session=session,
+            if is_initiator:
+                session = SessionInitiator(
+                    private_key=self._private_key,
+                    remote_node_id=remote_node_id,
                     remote_endpoint=remote_endpoint,
-                    inbound_packet_send_channel=inbound_channels[0],
-                    inbound_packet_receive_channel=inbound_channels[1],
                     outbound_packet_send_channel=outbound_channels[0],
-                    outbound_packet_receive_channel=outbound_channels[1],
+                    inbound_message_send_channel=self._inbound_message_send_channel.clone(),
                 )
-                self.manager.run_task(self._manage_connection, connection)
-                await connection.wait_ready()
-                return connection
+            else:
+                session = SessionRecipient(
+                    private_key=self._private_key,
+                    remote_node_id=remote_node_id,
+                    remote_endpoint=remote_endpoint,
+                    outbound_packet_send_channel=outbound_channels[0],
+                    inbound_message_send_channel=self._inbound_message_send_channel.clone(),
+                )
+
+            # We insert the session here to prevent a race condition where an
+            # alternate path to session creation results in a new session being
+            # inserted before the `_manage_session` task can run.
+            self._sessions[remote_node_id] = session
+
+            self.manager.run_task(self._manage_session, session, outbound_channels[1])
+            return session
 
     async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram]):
         async with receive_channel:
@@ -279,10 +158,10 @@ class Client(Service, ClientAPI):
                 async for datagram, endpoint in receive_channel:
                     packet = decode_packet(datagram)
                     remote_node_id = recover_source_id_from_tag(packet.tag, self.local_node_id)
-                    connection = await self._get_connection(
+                    session = self._get_session(
                         remote_node_id,
                         endpoint,
                         is_initiator=False,
                     )
-                    nursery.start_soon(connection.inbound_packet_send_channel.send, packet)
-                    self.logger.debug('Dispatching inbound packet to %s', connection)
+                    nursery.start_soon(session.handle_inbound_packet, packet)
+                    self.logger.debug('Dispatching inbound packet to %s', session)

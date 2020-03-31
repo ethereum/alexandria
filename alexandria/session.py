@@ -1,14 +1,21 @@
 import enum
 import hashlib
 import secrets
+from typing import Tuple
 
 from eth_keys import keys
-from eth_utils import ValidationError
+from eth_utils import encode_hex, ValidationError
+from ssz import sedes
 import trio
 
-from alexandria.abc import MessageAPI, PacketAPI, SessionAPI
+from alexandria.abc import Endpoint, MessageAPI, PacketAPI, SessionAPI
 from alexandria.exceptions import HandshakeFailure, DecryptionError
-from alexandria.handshake import compute_session_keys, create_id_nonce_signature, SessionKeys
+from alexandria.handshake import (
+    compute_session_keys,
+    create_id_nonce_signature,
+    create_id_nonce_signature_input,
+    SessionKeys,
+)
 from alexandria.packets import (
     MessagePacket,
     HandshakeResponse,
@@ -30,20 +37,23 @@ class SessionStatus(enum.Enum):
 
 class BaseSession(SessionAPI):
     def __init__(self,
-                 is_initiator: bool,
                  private_key: keys.PrivateKey,
                  remote_node_id: NodeID,
+                 remote_endpoint: Endpoint,
                  outbound_packet_send_channel: trio.abc.SendChannel[PacketAPI],
+                 inbound_message_send_channel: trio.abc.SendChannel[MessageAPI[sedes.Serializable]],
                  ) -> None:
-        self._is_initiator = is_initiator
-
         self._private_key = private_key
         self._remote_node_id = remote_node_id
+        self._remote_endpoint = remote_endpoint
         self._status = SessionStatus.BEFORE
         self._outbound_message_buffer_channels = trio.open_memory_channel[MessageAPI](256)
+
         self._inbound_packet_buffer_channels = trio.open_memory_channel[PacketAPI](256)
+
         # TODO
         self._outbound_packet_send_channel = outbound_packet_send_channel
+        self._inbound_message_send_channel = inbound_message_send_channel
 
     @property
     def is_before_handshake(self) -> bool:
@@ -56,10 +66,6 @@ class BaseSession(SessionAPI):
     @property
     def is_during_handshake(self) -> bool:
         return self._status is SessionStatus.DURING
-
-    @property
-    def is_initiator(self) -> bool:
-        return self._is_initiator
 
     @property
     def private_key(self) -> keys.PrivateKey:
@@ -75,6 +81,10 @@ class BaseSession(SessionAPI):
     @property
     def remote_node_id(self) -> NodeID:
         return self._remote_node_id
+
+    @property
+    def remote_endpoint(self) -> Endpoint:
+        return self._remote_endpoint
 
     @property
     def tag(self) -> Tag:
@@ -104,6 +114,8 @@ class BaseSession(SessionAPI):
 # Initiator
 #
 class SessionInitiator(BaseSession):
+    is_initiator = True
+
     #
     # Message API
     #
@@ -134,9 +146,15 @@ class SessionInitiator(BaseSession):
             raise NotImplementedError
         elif self.is_during_handshake:
             if isinstance(packet, HandshakeResponse):
-                self._session_keys = await self.receive_handshake_response(packet)
+                self._session_keys, ephemeral_public_key = await self.receive_handshake_response(
+                    packet
+                )
                 self._status = SessionStatus.AFTER
-                await self.send_handshake_completion(self._session_keys)
+                await self.send_handshake_completion(
+                    self._session_keys,
+                    ephemeral_public_key,
+                    packet,
+                )
             else:
                 self._inbound_packet_buffer_channels[0].send_nowait(packet)
         else:
@@ -161,7 +179,9 @@ class SessionInitiator(BaseSession):
         )
         await self._outbound_packet_send_channel.send(self._initiating_packet)
 
-    async def receive_handshake_response(self, packet: HandshakeResponse) -> SessionKeys:
+    async def receive_handshake_response(self,
+                                         packet: HandshakeResponse,
+                                         ) -> Tuple[SessionKeys, keys.PublicKey]:
         if not isinstance(packet, HandshakeResponse):
             raise Exception(f"Unhandled packet type: {type(packet)}")
         if not secrets.compare_digest(packet.token, self._initiating_packet.auth_tag):
@@ -170,44 +190,47 @@ class SessionInitiator(BaseSession):
         # compute session keys
         ephemeral_private_key = keys.PrivateKey(secrets.token_bytes(32))
 
-        remote_public_key_object = packet.public_key
-        remote_public_key_uncompressed = remote_public_key_object.to_bytes()
         session_keys = compute_session_keys(
             local_private_key=ephemeral_private_key,
-            remote_public_key=remote_public_key_uncompressed,
-            local_node_id=self.local_enr.node_id,
+            remote_public_key=packet.public_key,
+            local_node_id=self.local_node_id,
             remote_node_id=self.remote_node_id,
             id_nonce=packet.id_nonce,
-            is_locally_initiated=True,
+            is_initiator=True,
         )
-        return session_keys
+        return session_keys, ephemeral_private_key.public_key
 
-    async def send_handshake_completion(self, session_keys) -> None:
+    async def send_handshake_completion(self,
+                                        session_keys: SessionKeys,
+                                        ephemeral_public_key: keys.PublicKey,
+                                        response_packet: HandshakeResponse) -> None:
         # prepare response packet
         id_nonce_signature = create_id_nonce_signature(
-            id_nonce=session_keys.id_nonce,
-            ephemeral_public_key=session_keys.private_key.public_key,
-            private_key=self.local_private_key,
+            id_nonce=response_packet.id_nonce,
+            ephemeral_public_key=ephemeral_public_key,
+            private_key=self.private_key,
         )
 
-        auth_header_packet = MessagePacket.prepare(
+        complete_handshake_packet = CompleteHandshakePacket.prepare(
             tag=self.tag,
             auth_tag=get_random_auth_tag(),
-            id_nonce=session_keys.id_nonce,
-            message=self.initial_message,
+            id_nonce=response_packet.id_nonce,
+            message=self._initial_message,
             initiator_key=session_keys.encryption_key,
             id_nonce_signature=id_nonce_signature,
             auth_response_key=session_keys.auth_response_key,
-            ephemeral_public_key=session_keys.private_key.public_key,
-            public_key=self.local_private_key.public_key,
+            ephemeral_public_key=ephemeral_public_key,
+            public_key=self.private_key.public_key,
         )
-        await self._outbound_packet_send_channel.send(auth_header_packet)
+        await self._outbound_packet_send_channel.send(complete_handshake_packet)
 
 
 #
 # Receipient
 #
 class SessionRecipient(BaseSession):
+    is_initiator = False
+
     #
     # Message API
     #
@@ -254,14 +277,14 @@ class SessionRecipient(BaseSession):
 
     async def send_handshake_response(self, initiation_packet: MessagePacket) -> None:
         magic = compute_handshake_response_magic(self.remote_node_id)
-        response_packet = HandshakeResponse(
+        self.handshake_response_packet = HandshakeResponse(
             tag=self.tag,
             magic=magic,
             token=initiation_packet.auth_tag,
             id_nonce=get_random_id_nonce(),
             public_key=self.private_key.public_key,
         )
-        await self._outbound_packet_send_channel.send(response_packet)
+        await self._outbound_packet_send_channel.send(self.handshake_response_packet)
 
     async def receive_handshake_completion(self, packet: CompleteHandshakePacket) -> None:
         remote_node_id = recover_source_id_from_tag(
@@ -274,52 +297,89 @@ class SessionRecipient(BaseSession):
             )
 
         ephemeral_public_key = packet.header.ephemeral_public_key
-        try:
-            keys.PublicKey(ephemeral_public_key)
-        except Exception as err:
-            raise ValidationError('Invalid remote public key') from err
 
         session_keys = compute_session_keys(
-            local_private_key=self.local_private_key,
+            local_private_key=self.private_key,
             remote_public_key=ephemeral_public_key,
-            local_node_id=self.local_enr.node_id,
+            local_node_id=self.local_node_id,
             remote_node_id=self.remote_node_id,
-            id_nonce=self.who_are_you_packet.id_nonce,
-            is_locally_initiated=False,
+            id_nonce=self.handshake_response_packet.id_nonce,
+            is_initiator=False,
         )
 
         self.decrypt_and_validate_auth_response(
             packet,
             session_keys.auth_response_key,
-            self.who_are_you_packet.id_nonce,
+            self.handshake_response_packet.id_nonce,
         )
-        # TODO: where should this live
-        # message = self.decrypt_and_validate_message(
-        #     packet,
-        #     session_keys.decryption_key,
-        # )
+        message = self.decrypt_and_validate_message(
+            packet,
+            session_keys.decryption_key,
+        )
+        await self._inbound_message_send_channel.send(message)
         return session_keys, packet
 
+    def decrypt_and_validate_message(self,
+                                     complete_handshake_packet: CompleteHandshakePacket,
+                                     decryption_key: AES128Key
+                                     ) -> MessageAPI:
+        try:
+            return complete_handshake_packet.decrypt_payload(decryption_key)
+        except DecryptionError as error:
+            raise HandshakeFailure(
+                "Failed to decrypt message in AuthHeader packet with newly established session keys"
+            ) from error
+        except ValidationError as error:
+            raise HandshakeFailure("Received invalid message") from error
+
     def decrypt_and_validate_auth_response(self,
-                                           auth_header_packet: CompleteHandshakePacket,
+                                           complete_handshake_packet: CompleteHandshakePacket,
                                            auth_response_key: AES128Key,
                                            id_nonce: IDNonce,
                                            ) -> None:
         try:
-            id_nonce_signature = auth_header_packet.decrypt_auth_response(auth_response_key)
+            id_nonce_signature = complete_handshake_packet.decrypt_auth_response(auth_response_key)
         except DecryptionError as error:
             raise HandshakeFailure("Unable to decrypt auth response") from error
         except ValidationError as error:
             raise HandshakeFailure("Invalid auth response content") from error
 
         try:
-            self.identity_scheme.validate_id_nonce_signature(
+            validate_id_nonce_signature(
                 signature=id_nonce_signature,
                 id_nonce=id_nonce,
-                ephemeral_public_key=auth_header_packet.header.ephemeral_public_key,
-                public_key=auth_header_packet.header.public_key,
+                ephemeral_public_key=complete_handshake_packet.header.ephemeral_public_key,
+                public_key=complete_handshake_packet.header.public_key,
             )
         except ValidationError as error:
             raise HandshakeFailure("Invalid id nonce signature in auth response") from error
 
-        return enr
+
+def validate_id_nonce_signature(*,
+                                id_nonce: IDNonce,
+                                ephemeral_public_key: bytes,
+                                signature: keys.NonRecoverableSignature,
+                                public_key: keys.PublicKey,
+                                ) -> None:
+    signature_input = create_id_nonce_signature_input(
+        id_nonce=id_nonce,
+        ephemeral_public_key=ephemeral_public_key,
+    )
+    validate_signature(
+        message_hash=signature_input,
+        signature=signature,
+        public_key=public_key,
+    )
+
+
+def validate_signature(*,
+                       message_hash: bytes,
+                       signature: keys.NonRecoverableSignature,
+                       public_key: keys.PublicKey,
+                       ) -> None:
+
+    if not signature.verify_msg_hash(message_hash, public_key):
+        raise ValidationError(
+            f"Signature {encode_hex(signature)} is not valid for message hash "
+            f"{encode_hex(message_hash)} and public key {encode_hex(public_key)}"
+        )

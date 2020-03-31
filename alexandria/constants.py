@@ -34,6 +34,8 @@ ID_NONCE_SIGNATURE_PREFIX = b"discovery-id-nonce"
 NONCE_SIZE = 12  # size of an AESGCM nonce
 ZERO_NONCE = Nonce(b"\x00" * NONCE_SIZE)  # nonce used for the auth header packet
 
+AUTH_TAG_SIZE = NONCE_SIZE
+
 TAG_SIZE = 32  # size of the tag packet prefix
 
 MAGIC_SIZE = 32  # size of the magic hash in the who are you packet

@@ -4,8 +4,12 @@ from typing import NamedTuple, Type
 
 from eth_keys import keys
 from eth_typing import Hash32
+from eth_utils import ValidationError
 
-from alexandria.abc import MessageAPI, PacketAPI, TPacket
+import ssz
+from ssz import sedes
+
+from alexandria.abc import MessageAPI, PacketAPI, RegistryAPI, TPacket
 from alexandria.constants import (
     AUTH_SCHEME_NAME,
     AUTH_RESPONSE_VERSION,
@@ -16,8 +20,28 @@ from alexandria.constants import (
     HANDSHAKE_RESPONSE_MAGIC_SUFFIX,
     ZERO_NONCE,
 )
-from alexandria.encryption import aesgcm_encrypt
+from alexandria.encryption import aesgcm_encrypt, aesgcm_decrypt
+from alexandria.messages import default_registry
 from alexandria.typing import Tag, NodeID, Nonce, IDNonce, AES128Key
+
+
+bytes12 = sedes.ByteVector(12)
+bytes33 = sedes.ByteVector(33)
+bytes64 = sedes.ByteVector(64)
+
+
+class ByteList(sedes.List):
+    def __init__(self, max_length: int) -> None:
+        super().__init__(element_sedes=sedes.uint, max_length=max_length)
+
+    def serialize(self, value: bytes):
+        return value
+
+    def deserialize(self, value: bytes):
+        return value
+
+
+byte_list = ByteList(2**32)
 
 
 class AuthHeader(NamedTuple):
@@ -27,6 +51,27 @@ class AuthHeader(NamedTuple):
     ephemeral_public_key: keys.PublicKey
     public_key: keys.PublicKey
     encrypted_auth_response: bytes
+
+
+AUTH_HEADER_SEDES = ssz.Container((
+    bytes12,  # auth_tag
+    sedes.bytes32,  # id_nonce
+    byte_list,  # auth_scheme
+    bytes33,  # ephemeral public key (compressed)
+    bytes33,  # public key (compressed)
+    byte_list,  # encrypted_auth_response
+))
+COMPLETE_HANDSHAKE_PACKET_SEDES = ssz.Container((
+    sedes.bytes32,  # tag
+    AUTH_HEADER_SEDES,  # header
+    byte_list,  # encrypted_message
+))
+
+
+AUTH_RESPONSE_SEDES = ssz.Container((
+    sedes.uint8,
+    bytes64,
+))
 
 
 class CompleteHandshakePacket(PacketAPI):
@@ -62,7 +107,7 @@ class CompleteHandshakePacket(PacketAPI):
             auth_response_key=auth_response_key,
             id_nonce_signature=id_nonce_signature,
         )
-        auth_header = AuthHeader(
+        header = AuthHeader(
             auth_tag=auth_tag,
             id_nonce=id_nonce,
             auth_scheme_name=AUTH_SCHEME_NAME,
@@ -80,21 +125,94 @@ class CompleteHandshakePacket(PacketAPI):
 
         return cls(
             tag=tag,
-            auth_header=auth_header,
+            header=header,
             encrypted_message=encrypted_message,
         )
 
+    def decrypt_payload(self,
+                        key: AES128Key,
+                        message_registry: RegistryAPI = default_registry,
+                        ) -> ssz.Serializable:
+        return _decrypt_payload(
+            key=key,
+            auth_tag=self.header.auth_tag,
+            encrypted_message=self.encrypted_message,
+            authenticated_data=self.tag,
+            message_registry=message_registry,
+        )
+
     def to_wire_bytes(self) -> bytes:
-        raise NotImplementedError
-        return b''.join((
-            self.tag,
-            ...,
-            self.encrypted_message,
-        ))
+        return ssz.encode(
+            (
+                self.tag,
+                (
+                    self.header.auth_tag,
+                    self.header.id_nonce,
+                    self.header.auth_scheme_name,
+                    self.header.ephemeral_public_key.to_compressed_bytes(),
+                    self.header.public_key.to_compressed_bytes(),
+                    self.header.encrypted_auth_response,
+                ),
+                self.encrypted_message,
+            ),
+            sedes=COMPLETE_HANDSHAKE_PACKET_SEDES,
+        )
 
     @classmethod
     def from_wire_bytes(cls: Type[TPacket], data: bytes) -> TPacket:
-        raise NotImplementedError
+        tag, header_as_tuple, encrypted_message = ssz.decode(data, COMPLETE_HANDSHAKE_PACKET_SEDES)
+        (
+            auth_tag,
+            id_nonce,
+            auth_scheme_name,
+            ephemeral_public_key_bytes,
+            public_key_bytes,
+            encrypted_auth_response,
+        ) = header_as_tuple
+        ephemeral_public_key = keys.PublicKey.from_compressed_bytes(ephemeral_public_key_bytes)
+        public_key = keys.PublicKey.from_compressed_bytes(public_key_bytes)
+        header = AuthHeader(
+            auth_tag,
+            id_nonce,
+            auth_scheme_name,
+            ephemeral_public_key,
+            public_key=public_key,
+            encrypted_auth_response=encrypted_auth_response,
+        )
+        return cls(
+            tag=tag,
+            header=header,
+            encrypted_message=encrypted_message,
+        )
+
+    def decrypt_auth_response(self, auth_response_key: AES128Key) -> keys.NonRecoverableSignature:
+        """Extract id nonce signature from complete handshake packet."""
+        plain_text = aesgcm_decrypt(
+            key=auth_response_key,
+            nonce=ZERO_NONCE,
+            cipher_text=self.header.encrypted_auth_response,
+            authenticated_data=b"",
+        )
+
+        version, id_nonce_signature = ssz.decode(plain_text, AUTH_RESPONSE_SEDES)
+
+        if version != AUTH_RESPONSE_VERSION:
+            raise ValidationError(
+                f"Expected auth response version {AUTH_RESPONSE_VERSION}, but got {version}"
+            )
+
+        signature = keys.NonRecoverableSignature(id_nonce_signature)
+
+        return signature
+
+
+HANDSHAKE_RESPONSE_SEDES = sedes.Container((
+    sedes.bytes32,
+    sedes.bytes32,
+    bytes12,
+    sedes.bytes32,
+    bytes33,
+))
 
 
 class HandshakeResponse(PacketAPI):
@@ -120,23 +238,18 @@ class HandshakeResponse(PacketAPI):
         self.public_key = public_key
 
     def to_wire_bytes(self) -> bytes:
-        return b''.join((
-            self.tag,
-            self.magic,
-            self.token,
-            self.id_nonce,
-            self.public_key.to_compressed_bytes(),
-        ))
+        return ssz.encode(
+            (self.tag, self.magic, self.token, self.id_nonce, self.public_key.to_compressed_bytes()),  # noqa: E501
+            sedes=HANDSHAKE_RESPONSE_SEDES,
+        )
 
     @classmethod
     def from_wire_bytes(cls: Type[TPacket], data: bytes) -> TPacket:
-        assert len(data) == 32 + 32 + NONCE_SIZE + ID_NONCE_SIZE + 33
-        tag = data[:32]
-        magic = data[32:64]
-        token = data[64:64 + NONCE_SIZE]
-        id_nonce = data[64 + NONCE_SIZE:64 + NONCE_SIZE + ID_NONCE_SIZE]
-        compressed_public_key_bytes = data[-33:]
-        public_key = keys.PublicKey.from_compressed_bytes(compressed_public_key_bytes)
+        tag, magic, token, id_nonce, public_key_compressed_bytes = ssz.decode(
+            data,
+            HANDSHAKE_RESPONSE_SEDES,
+        )
+        public_key = keys.PublicKey.from_compressed_bytes(public_key_compressed_bytes)
         return cls(
             tag=tag,
             magic=magic,
@@ -144,6 +257,13 @@ class HandshakeResponse(PacketAPI):
             id_nonce=id_nonce,
             public_key=public_key,
         )
+
+
+MESSAGE_PACKET_SEDES = ssz.Container((
+    sedes.bytes32,
+    bytes12,
+    byte_list,
+))
 
 
 class MessagePacket(PacketAPI):
@@ -163,20 +283,14 @@ class MessagePacket(PacketAPI):
         self.encrypted_message = encrypted_message
 
     def to_wire_bytes(self) -> bytes:
-        return b''.join((
-            self.tag,
-            self.auth_tag,
-            self.encrypted_message,
-        ))
+        return ssz.encode(
+            (self.tag, self.auth_tag, self.encrypted_message),
+            sedes=MESSAGE_PACKET_SEDES,
+        )
 
     @classmethod
     def from_wire_bytes(cls: Type[TPacket], data: bytes) -> TPacket:
-        tag = data[:32]
-        assert len(tag) == 32
-        auth_tag = data[32:32 + NONCE_SIZE]
-        assert len(auth_tag) == NONCE_SIZE
-        encrypted_message = data[32 + NONCE_SIZE:]
-        assert len(encrypted_message) > 0
+        tag, auth_tag, encrypted_message = ssz.decode(data, MESSAGE_PACKET_SEDES)
         return cls(
             tag=tag,
             auth_tag=auth_tag,
@@ -184,6 +298,43 @@ class MessagePacket(PacketAPI):
         )
 
 
+#
+# Packet decryption
+#
+def _decrypt_payload(key: AES128Key,
+                     auth_tag: Nonce,
+                     encrypted_message: bytes,
+                     authenticated_data: bytes,
+                     message_registry: RegistryAPI,
+                     ) -> ssz.Serializable:
+    plain_text = aesgcm_decrypt(
+        key=key,
+        nonce=auth_tag,
+        cipher_text=encrypted_message,
+        authenticated_data=authenticated_data,
+    )
+
+    try:
+        message_id = plain_text[0]
+    except IndexError:
+        raise ValidationError("Decrypted message is empty")
+
+    try:
+        sedes = message_registry.get_sedes(message_id)
+    except KeyError:
+        raise ValidationError(f"Unknown message type {message_id}")
+
+    try:
+        message = ssz.decode(plain_text[1:], sedes)
+    except ssz.DeserializationError as error:
+        raise ValidationError("Encrypted message does not contain valid RLP") from error
+
+    return message
+
+
+#
+# Packet encoding/decoding
+#
 def encode_packet(packet: PacketAPI):
     return ALL_BYTES[packet.packet_id] + packet.to_wire_bytes()
 
@@ -206,11 +357,10 @@ def decode_packet(data: bytes) -> PacketAPI:
 def compute_encrypted_auth_response(auth_response_key: AES128Key,
                                     id_nonce_signature: bytes,
                                     ) -> bytes:
-    plain_text_auth_response = b''.join((
-        ALL_BYTES[AUTH_RESPONSE_VERSION],
-        len(id_nonce_signature).to_bytes(2, 'big'),
-        id_nonce_signature,
-    ))
+    plain_text_auth_response = ssz.encode(
+        (AUTH_RESPONSE_VERSION, id_nonce_signature),
+        sedes=AUTH_RESPONSE_SEDES,
+    )
 
     encrypted_auth_response = aesgcm_encrypt(
         key=auth_response_key,

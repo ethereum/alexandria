@@ -1,10 +1,21 @@
 from abc import ABC, abstractmethod
 import ipaddress
-from typing import NamedTuple, Optional, Tuple, Type, TypeVar
+from typing import (
+    AsyncIterable,
+    Callable,
+    ContextManager,
+    Generic,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+)
+
+from ssz import sedes
 
 from async_service import ServiceAPI
 from eth_keys import keys
-import trio
 
 from .typing import NodeID, Tag
 
@@ -36,14 +47,29 @@ class Datagram(NamedTuple):
     endpoint: Endpoint
 
 
-class MessageAPI(ABC):
-    ...
+TPayload = TypeVar('TPayload', bound=sedes.Serializable)
+
+
+class RegistryAPI(ABC):
+    @abstractmethod
+    def register(self, message_id: int) -> Callable[[Type[TPayload]], Type[TPayload]]:
+        ...
+
+
+class MessageAPI(Generic[TPayload]):
+    message_id: int
+    payload: TPayload
+    node_id: NodeID
+    endpoint: Endpoint
+
+    @abstractmethod
+    def to_bytes(self) -> bytes:
+        ...
 
 
 class SessionAPI(ABC):
     @abstractmethod
     def __init__(self,
-                 is_initiator: bool,
                  local_private_key: keys.PrivateKey,
                  remote_node_id: NodeID,
                  ) -> None:
@@ -78,12 +104,6 @@ class SessionAPI(ABC):
 
     @property
     @abstractmethod
-    def is_initiator(self) -> bool:
-        """`True` if the handshake was initiated by us, `False` if it was initiated by the peer."""
-        ...
-
-    @property
-    @abstractmethod
     def private_key(self) -> keys.PrivateKey:
         """The static node key of this node."""
         ...
@@ -102,23 +122,27 @@ class SessionAPI(ABC):
 
     @property
     @abstractmethod
+    def remote_endpoint(self) -> Endpoint:
+        """The peer's endpoint."""
+        ...
+
+    @property
+    @abstractmethod
     def tag(self) -> Tag:
         """The tag used for message packets sent by this node to the peer."""
         ...
 
 
-class ConnectionAPI(ABC):
-    inbound_packet_send_channel: trio.abc.SendChannel[PacketAPI]
-    outbound_packet_receive_channel: trio.abc.SendChannel[PacketAPI]
+TItem = TypeVar('TItem')
 
-    remote_endpoint: Endpoint
 
+class SubscriptionAPI(ContextManager['SubscriptionAPI["TItem"]'], Generic[TItem]):
     @abstractmethod
-    async def wait_ready(self) -> None:
+    async def receive(self) -> TItem:
         ...
 
     @abstractmethod
-    async def send_message(self, message: MessageAPI) -> None:
+    async def stream(self) -> AsyncIterable[TItem]:
         ...
 
 
@@ -135,16 +159,20 @@ class NodeAPI(ABC):
 
 class EventsAPI(ABC):
     @abstractmethod
-    async def new_connection(self, connection: ConnectionAPI) -> None:
+    async def new_session(self, session: SessionAPI) -> None:
         ...
 
     @abstractmethod
-    async def wait_new_connection(self) -> ConnectionAPI:
+    async def wait_new_session(self) -> SessionAPI:
         ...
 
 
 class ClientAPI(ServiceAPI):
     events: EventsAPI
+
+    @abstractmethod
+    def subscribe(self, payload_type: Type[TPayload]) -> SubscriptionAPI[MessageAPI[TPayload]]:
+        ...
 
 
 class NodeDatabaseAPI(ABC):
