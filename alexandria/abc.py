@@ -41,6 +41,9 @@ class Endpoint(NamedTuple):
     ip_address: ipaddress.IPv4Address
     port: int
 
+    def __str__(self):
+        return f"{self.ip_address}:{self.port}"
+
 
 class Datagram(NamedTuple):
     datagram: bytes

@@ -6,7 +6,7 @@ from eth_utils import humanize_hash
 
 from async_service import background_trio_service
 
-from alexandria.messages import Ping
+from alexandria.messages import Ping, Message, Pong
 from alexandria.tools.factories import ClientFactory, EndpointFactory
 
 logger = logging.getLogger('alexandria.testing')
@@ -24,6 +24,7 @@ async def test_client_connect(nursery):
         await alice.wait_listening()
         await bob.wait_listening()
 
+        alice_endpoint = EndpointFactory(ip_address='127.0.0.1', port=alice.listen_on.port)
         bob_endpoint = EndpointFactory(ip_address='127.0.0.1', port=bob.listen_on.port)
 
         with bob.subscribe(Ping) as subscription:
@@ -33,6 +34,17 @@ async def test_client_connect(nursery):
                     alice_session = await dial_in_from_alice
                 assert alice_session.remote_node_id == alice.local_node_id
 
-            msg = await subscription.receive()
-            assert isinstance(msg, Ping)
-            assert msg.id == 1234
+            ping_msg = await subscription.receive()
+            assert isinstance(ping_msg, Message)
+            payload = ping_msg.payload
+            assert isinstance(payload, Ping)
+            assert payload.id == 1234
+
+        with alice.subscribe(Pong) as subscription:
+            await bob.pong(1234, alice.local_node_id, alice_endpoint)
+
+            pong_msg = await subscription.receive()
+            assert isinstance(pong_msg, Message)
+            payload = pong_msg.payload
+            assert isinstance(payload, Pong)
+            assert payload.ping_id == 1234

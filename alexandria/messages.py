@@ -68,6 +68,9 @@ class Message(MessageAPI[TPayload]):
         self.endpoint = endpoint
         self.message_id = message_registry.get_message_id(type(payload))
 
+    def __str__(self) -> str:
+        return f"Message[{self.message_id}/{self.payload}]"
+
     def to_bytes(self) -> None:
         return ALL_BYTES[self.message_id] + ssz.encode(self.payload)
 

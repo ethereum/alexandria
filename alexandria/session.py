@@ -1,5 +1,6 @@
 import enum
 import hashlib
+import logging
 import secrets
 from typing import Tuple
 
@@ -8,6 +9,7 @@ from eth_utils import encode_hex, ValidationError
 from ssz import sedes
 import trio
 
+from alexandria._utils import humanize_node_id
 from alexandria.abc import Endpoint, MessageAPI, PacketAPI, SessionAPI
 from alexandria.exceptions import HandshakeFailure, DecryptionError
 from alexandria.handshake import (
@@ -16,6 +18,7 @@ from alexandria.handshake import (
     create_id_nonce_signature_input,
     SessionKeys,
 )
+from alexandria.messages import Message
 from alexandria.packets import (
     MessagePacket,
     HandshakeResponse,
@@ -30,12 +33,14 @@ from alexandria.typing import NodeID, Tag, AES128Key, IDNonce
 
 
 class SessionStatus(enum.Enum):
-    BEFORE = enum.auto()
-    DURING = enum.auto()
-    AFTER = enum.auto()
+    BEFORE = '|'
+    DURING = '='
+    AFTER = '-'
 
 
 class BaseSession(SessionAPI):
+    logger = logging.getLogger('alexandria.session.Session')
+
     def __init__(self,
                  private_key: keys.PrivateKey,
                  remote_node_id: NodeID,
@@ -54,6 +59,21 @@ class BaseSession(SessionAPI):
         # TODO
         self._outbound_packet_send_channel = outbound_packet_send_channel
         self._inbound_message_send_channel = inbound_message_send_channel
+
+    def __str__(self) -> str:
+        if self.is_initiator:
+            connector = f'-{self._status.value}->'
+        else:
+            connector = f'<-{self._status.value}-'
+
+        return (
+            "Session["
+            f"{humanize_node_id(self.local_node_id)}"
+            f"{connector}"
+            f"{humanize_node_id(self.remote_node_id)}"
+            f"@{self.remote_endpoint}"
+            "]"
+        )
 
     @property
     def is_before_handshake(self) -> bool:
@@ -121,14 +141,21 @@ class SessionInitiator(BaseSession):
     #
     async def handle_outbound_message(self, message: MessageAPI) -> None:
         if self.is_handshake_complete:
+            self.logger.debug("%s: sending message: %s", self, message)
             # TODO: construct MessagePacket
             raise NotImplementedError
         elif self.is_before_handshake:
+            self.logger.debug(
+                "%s: outbound message triggered handshake initiation: %s",
+                self,
+                message,
+            )
             self._initial_message = message
             await self.send_handshake_initiation()
         elif self.is_during_handshake:
             self.logger.debug(
-                'handshake in progress: placing outbound message in queue: %s',
+                '%s: handshake in progress: placing outbound message in queue: %s',
+                self,
                 message,
             )
             # TODO: handle full buffer...
@@ -141,7 +168,25 @@ class SessionInitiator(BaseSession):
     #
     async def handle_inbound_packet(self, packet: PacketAPI) -> None:
         if self.is_handshake_complete:
-            raise NotImplementedError
+            if isinstance(packet, MessagePacket):
+                payload = packet.decrypt_payload(self._session_keys.decryption_key)
+                message = Message(
+                    payload=payload,
+                    node_id=self.remote_node_id,
+                    endpoint=self.remote_endpoint,
+                )
+                self.logger.debug(
+                    '%s: processed inbound message packet: %s',
+                    self,
+                    message,
+                )
+                await self._inbound_message_send_channel.send(message)
+            else:
+                self.logger.debug(
+                    '%s: Ignoring packet of type %s received after handshake complete',
+                    self,
+                    type(packet),
+                )
         elif self.is_before_handshake:
             raise NotImplementedError
         elif self.is_during_handshake:
@@ -187,6 +232,8 @@ class SessionInitiator(BaseSession):
         if not secrets.compare_digest(packet.token, self._initiating_packet.auth_tag):
             raise ValidationError("Mismatch between token")
 
+        self.logger.debug('%s: receiving handshake response', self)
+
         # compute session keys
         ephemeral_private_key = keys.PrivateKey(secrets.token_bytes(32))
 
@@ -204,6 +251,8 @@ class SessionInitiator(BaseSession):
                                         session_keys: SessionKeys,
                                         ephemeral_public_key: keys.PublicKey,
                                         response_packet: HandshakeResponse) -> None:
+        self.logger.debug('%s: sending handshake completion', self)
+
         # prepare response packet
         id_nonce_signature = create_id_nonce_signature(
             id_nonce=response_packet.id_nonce,
@@ -236,11 +285,29 @@ class SessionRecipient(BaseSession):
     #
     async def handle_outbound_message(self, message: MessageAPI) -> None:
         if self.is_handshake_complete:
-            raise NotImplementedError
+            self.logger.debug("%s: sending message: %s", self, message)
+            packet = MessagePacket.prepare(
+                tag=self.tag,
+                auth_tag=get_random_auth_tag(),
+                message=message,
+                key=self._session_keys.encryption_key,
+            )
+            await self._outbound_packet_send_channel.send(packet)
         elif self.is_before_handshake:
+            self.logger.debug(
+                "%s: outbound message before handshake: %s",
+                self,
+                message,
+            )
             raise NotImplementedError
         elif self.is_during_handshake:
-            raise NotImplementedError
+            self.logger.debug(
+                '%s: handshake in progress: placing outbound message in queue: %s',
+                self,
+                message,
+            )
+            # TODO: handle full buffer...
+            self._outbound_message_buffer_channels[0].send_nowait(message)
         else:
             raise Exception("Invalid state")
 
@@ -258,7 +325,8 @@ class SessionRecipient(BaseSession):
                 # TODO: full buffer handling
                 self._inbound_packet_buffer_channels.send_nowait(packet)
         elif self.is_during_handshake:
-            await self.receive_handshake_completion(packet)
+            self._session_keys = await self.receive_handshake_completion(packet)
+            self._status = SessionStatus.AFTER
         else:
             raise Exception("Invalid state")
 
@@ -273,9 +341,11 @@ class SessionRecipient(BaseSession):
             raise Exception("Invalid state")
 
     async def receive_handshake_initiation(self, packet: MessagePacket) -> None:
+        self.logger.debug('%s: received handshake initiation')
         self._status = SessionStatus.DURING
 
     async def send_handshake_response(self, initiation_packet: MessagePacket) -> None:
+        self.logger.debug('%s: sending handshake response')
         magic = compute_handshake_response_magic(self.remote_node_id)
         self.handshake_response_packet = HandshakeResponse(
             tag=self.tag,
@@ -287,6 +357,7 @@ class SessionRecipient(BaseSession):
         await self._outbound_packet_send_channel.send(self.handshake_response_packet)
 
     async def receive_handshake_completion(self, packet: CompleteHandshakePacket) -> None:
+        self.logger.debug('%s: received handshake completion', self)
         remote_node_id = recover_source_id_from_tag(
             packet.tag,
             self.local_node_id,
@@ -312,12 +383,17 @@ class SessionRecipient(BaseSession):
             session_keys.auth_response_key,
             self.handshake_response_packet.id_nonce,
         )
-        message = self.decrypt_and_validate_message(
+        payload = self.decrypt_and_validate_message(
             packet,
             session_keys.decryption_key,
         )
+        message = Message(
+            payload=payload,
+            node_id=remote_node_id,
+            endpoint=self.remote_endpoint,
+        )
         await self._inbound_message_send_channel.send(message)
-        return session_keys, packet
+        return session_keys
 
     def decrypt_and_validate_message(self,
                                      complete_handshake_packet: CompleteHandshakePacket,

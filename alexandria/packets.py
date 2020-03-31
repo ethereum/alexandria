@@ -282,10 +282,42 @@ class MessagePacket(PacketAPI):
         self.auth_tag = auth_tag
         self.encrypted_message = encrypted_message
 
+    @classmethod
+    def prepare(cls,
+                *,
+                tag: Tag,
+                auth_tag: Nonce,
+                message: MessageAPI,
+                key: AES128Key,
+                ) -> "AuthTagPacket":
+        encrypted_message = compute_encrypted_message(
+            key=key,
+            auth_tag=auth_tag,
+            message=message,
+            authenticated_data=tag,
+        )
+        return cls(
+            tag=tag,
+            auth_tag=auth_tag,
+            encrypted_message=encrypted_message,
+        )
+
     def to_wire_bytes(self) -> bytes:
         return ssz.encode(
             (self.tag, self.auth_tag, self.encrypted_message),
             sedes=MESSAGE_PACKET_SEDES,
+        )
+
+    def decrypt_payload(self,
+                        key: AES128Key,
+                        message_registry: RegistryAPI = default_registry,
+                        ) -> ssz.Serializable:
+        return _decrypt_payload(
+            key=key,
+            auth_tag=self.auth_tag,
+            encrypted_message=self.encrypted_message,
+            authenticated_data=self.tag,
+            message_registry=message_registry,
         )
 
     @classmethod

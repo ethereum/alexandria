@@ -24,7 +24,7 @@ from alexandria.abc import (
 )
 from alexandria.datagrams import listen
 from alexandria.events import Events
-from alexandria.messages import Message, Ping
+from alexandria.messages import Message, Ping, Pong
 from alexandria.packets import encode_packet, decode_packet
 from alexandria.session import SessionInitiator, SessionRecipient
 from alexandria.subscriptions import SubscriptionManager
@@ -89,6 +89,16 @@ class Client(Service, ClientAPI):
 
     async def ping(self, ping_id: int, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
         payload = Ping(id=ping_id)
+        message = Message(
+            payload=payload,
+            node_id=remote_node_id,
+            endpoint=remote_endpoint,
+        )
+        session = self._get_session(remote_node_id, remote_endpoint, is_initiator=True)
+        await session.handle_outbound_message(message)
+
+    async def pong(self, ping_id: int, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
+        payload = Pong(ping_id=ping_id)
         message = Message(
             payload=payload,
             node_id=remote_node_id,

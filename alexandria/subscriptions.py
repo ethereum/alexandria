@@ -69,8 +69,12 @@ class SubscriptionManager(Service):
         async with receive_channel:
             async with trio.open_nursery() as nursery:
                 async for message in receive_channel:
-                    self.logger.debug('Handling message: %s', type(message))
-                    channels = self._subscriptions[type(message)]
+                    channels = self._subscriptions[message.message_id]
+                    self.logger.debug(
+                        'Handling %d subscriptions for message: %s',
+                        len(channels),
+                        message,
+                    )
                     for send_channel in channels:
                         nursery.start_soon(send_channel.send, message)
 
