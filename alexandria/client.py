@@ -1,5 +1,4 @@
 import logging
-from typing import Type
 
 import trio
 
@@ -13,21 +12,15 @@ from alexandria.abc import (
     Endpoint,
     MessageAPI,
     SessionAPI,
-    SubscriptionAPI,
-    TPayload,
 )
 from alexandria.datagrams import listen
 from alexandria.exceptions import SessionNotFound
 from alexandria.events import Events
-from alexandria.messages import Message, Ping, Pong
 from alexandria.packets import decode_packet, NetworkPacket
 from alexandria.pool import Pool
-from alexandria.subscriptions import SubscriptionManager
+from alexandria.message_dispatcher import MessageDispatcher
 from alexandria.typing import NodeID
 from alexandria.tags import recover_source_id_from_tag
-
-
-DEFAULT_LISTEN_ON = Endpoint('0.0.0.0', 8628)
 
 
 class Client(Service, ClientAPI):
@@ -35,7 +28,7 @@ class Client(Service, ClientAPI):
 
     def __init__(self,
                  private_key: keys.PrivateKey,
-                 listen_on: Endpoint = DEFAULT_LISTEN_ON,
+                 listen_on: Endpoint,
                  ) -> None:
         self._private_key = private_key
         self.public_key = private_key.public_key
@@ -81,7 +74,10 @@ class Client(Service, ClientAPI):
             inbound_message_send_channel=self._inbound_message_send_channel,
         )
 
-        self._subscription_manager = SubscriptionManager(self._inbound_message_receive_channel)
+        self.message_dispatcher = MessageDispatcher(
+            self._outbound_message_send_channel,
+            self._inbound_message_receive_channel,
+        )
 
     async def wait_listening(self) -> None:
         await self._listening.wait()
@@ -89,7 +85,7 @@ class Client(Service, ClientAPI):
     async def run(self) -> None:
         # Run the subscription manager with gets fed all decoded inbound
         # messages and dispatches them to individual subscriptions.
-        self.manager.run_daemon_child_service(self._subscription_manager)
+        self.manager.run_daemon_child_service(self.message_dispatcher)
 
         listener = listen(
             self.listen_on,
@@ -116,27 +112,6 @@ class Client(Service, ClientAPI):
                 self.listen_on,
             )
             await self.manager.wait_finished()
-
-    def subscribe(self, payload_type: Type[TPayload]) -> SubscriptionAPI[MessageAPI[TPayload]]:
-        return self._subscription_manager.subscribe(payload_type)
-
-    async def ping(self, ping_id: int, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
-        payload = Ping(id=ping_id)
-        message = Message(
-            payload=payload,
-            node_id=remote_node_id,
-            endpoint=remote_endpoint,
-        )
-        await self._outbound_message_send_channel.send(message)
-
-    async def pong(self, ping_id: int, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
-        payload = Pong(ping_id=ping_id)
-        message = Message(
-            payload=payload,
-            node_id=remote_node_id,
-            endpoint=remote_endpoint,
-        )
-        await self._outbound_message_send_channel.send(message)
 
     async def _get_or_create_session(self,
                                      node_id: NodeID,

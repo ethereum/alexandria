@@ -8,6 +8,7 @@ from typing import (
     Callable,
     ContextManager,
     Generic,
+    Iterator,
     NamedTuple,
     Optional,
     Tuple,
@@ -141,6 +142,10 @@ class SessionAPI(ABC):
 
 class PoolAPI(ABC):
     @abstractmethod
+    def has_session(self, remote_node_id: NodeID) -> bool:
+        ...
+
+    @abstractmethod
     def get_session(self, remote_node_id: NodeID) -> SessionAPI:
         ...
 
@@ -190,15 +195,50 @@ class EventsAPI(ABC):
         ...
 
 
-class ClientAPI(ServiceAPI):
-    events: EventsAPI
-
+class MessageDispatcherAPI(ServiceAPI):
     @abstractmethod
     def subscribe(self, payload_type: Type[TPayload]) -> SubscriptionAPI[MessageAPI[TPayload]]:
         ...
 
-
-class NodeDatabaseAPI(ABC):
     @abstractmethod
-    async def get_bootnodes(self) -> Tuple[NodeID, ...]:
+    def request_response(self,
+                         message: MessageAPI,
+                         response_payload_type: Type[TPayload]) -> MessageAPI[TPayload]:
+        ...
+
+
+class ClientAPI(ServiceAPI):
+    events: EventsAPI
+    message_dispatcher: MessageDispatcherAPI
+    pool: PoolAPI
+
+
+class RoutingTableAPI(ABC):
+    @abstractmethod
+    def update(self, node_id: NodeID) -> NodeID:
+        ...
+
+    @abstractmethod
+    def update_bucket_unchecked(self, node_id: NodeID) -> None:
+        ...
+
+    @abstractmethod
+    def remove(self, node_id: NodeID) -> None:
+        ...
+
+    @abstractmethod
+    def get_nodes_at_log_distance(self, log_distance: int) -> Tuple[NodeID, ...]:
+        ...
+
+    @abstractmethod
+    @property
+    def is_empty(self) -> bool:
+        ...
+
+    @abstractmethod
+    def get_least_recently_updated_log_distance(self) -> int:
+        ...
+
+    @abstractmethod
+    def iter_nodes_around(self, reference_node_id: NodeID) -> Iterator[NodeID]:
         ...

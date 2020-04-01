@@ -8,6 +8,9 @@ KEY_BYTE_SIZE = KEY_BIT_SIZE // 8
 # Max size of packets.
 MAX_PACKET_SIZE = 1280
 
+# Max size for the `nodes` payload of a `FoundNodes` message
+FOUND_NODES_PAYLOAD_SIZE = MAX_PACKET_SIZE - 200
+
 # Buffer size used for incoming discovery UDP datagrams (must be larger than
 # MAX_PACKET_SIZE)
 DATAGRAM_BUFFER_SIZE = MAX_PACKET_SIZE * 2

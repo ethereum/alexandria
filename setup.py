@@ -15,7 +15,7 @@ extras_require = {
     'lint': [
         "flake8==3.4.1",
         "isort>=4.2.15,<5",
-        "mypy==0.701",
+        "mypy==0.770",
         "pydocstyle>=3.0.0,<4",
     ],
     'doc': [
@@ -67,7 +67,6 @@ setup(
         "trio==0.13.0",
         "trio-typing==0.3.0",
         "async-generator==1.10",
-
     ],
     python_requires='>=3.6, <4',
     extras_require=extras_require,
@@ -86,4 +85,9 @@ setup(
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: Implementation :: PyPy',
     ],
+    entry_points={
+        'console_scripts': [
+            'alexandria=alexandria._boot:_boot',
+        ],
+    },
 )

@@ -22,6 +22,7 @@ def setup_stderr_logging(level: int = None) -> logging.StreamHandler:
     if level is None:
         level = logging.INFO
     logger = logging.getLogger()
+    logger.setLevel(level)
 
     handler_stream = logging.StreamHandler(sys.stderr)
 

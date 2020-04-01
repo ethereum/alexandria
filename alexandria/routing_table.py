@@ -9,14 +9,12 @@ from eth_utils import (
     encode_hex,
 )
 
-from .constants import KEY_BITS
+from .constants import KEY_BIT_SIZE
 from .typing import NodeID
 
 
 def compute_distance(left_node_id: NodeID, right_node_id: NodeID) -> int:
-    left_int = big_endian_to_int(left_node_id)
-    right_int = big_endian_to_int(right_node_id)
-    return left_int ^ right_int
+    return left_node_id ^ right_node_id
 
 
 def compute_log_distance(left_node_id: NodeID, right_node_id: NodeID) -> int:
@@ -29,7 +27,7 @@ def compute_log_distance(left_node_id: NodeID, right_node_id: NodeID) -> int:
 class RoutingTable:
     logger = logging.getLogger("p2p.discv5.routing_table.KademliaRoutingTable")
 
-    def __init__(self, center_node_id: NodeID, bucket_size: int, num_bits=KEY_BITS) -> None:
+    def __init__(self, center_node_id: NodeID, bucket_size: int, num_bits=KEY_BIT_SIZE) -> None:
         self.center_node_id = center_node_id
         self.bucket_size = bucket_size
         self._num_bits = num_bits

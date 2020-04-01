@@ -39,6 +39,9 @@ class Pool(PoolAPI):
         self._outbound_packet_send_channel = outbound_packet_send_channel
         self._inbound_message_send_channel = inbound_message_send_channel
 
+    def has_session(self, remote_node_id: NodeID) -> bool:
+        return remote_node_id in self._sessions
+
     def get_session(self, remote_node_id: NodeID) -> SessionAPI:
         if remote_node_id not in self._sessions:
             raise SessionNotFound(f"No session found for {humanize_node_id(remote_node_id)}")

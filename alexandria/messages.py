@@ -1,4 +1,4 @@
-from typing import Callable, Mapping, Type
+from typing import Callable, Mapping, Tuple, Type
 
 import ssz
 from ssz import sedes
@@ -78,16 +78,44 @@ class Message(MessageAPI[TPayload]):
 @register(message_id=0)
 class Ping(sedes.Serializable):
     fields = (
-        ('id', sedes.uint16),
+        ('request_id', sedes.uint16),
     )
 
-    id: int
+    request_id: int
 
 
 @register(message_id=1)
 class Pong(sedes.Serializable):
     fields = (
-        ('ping_id', sedes.uint16),
+        ('request_id', sedes.uint16),
     )
 
-    ping_id: int
+    request_id: int
+
+
+@register(message_id=2)
+class FindNodes(sedes.Serializable):
+    fields = (
+        ("request_id", sedes.uint16),
+        ("distance", sedes.uint256),
+    )
+
+    request_id: int
+    distance: int
+
+
+@register(message_id=3)
+class FoundNodes(sedes.Serializable):
+    fields = (
+        ("request_id", sedes.uint16),
+        ("total", sedes.uint16),
+        ("nodes", sedes.List(sedes.Container((
+            sedes.uint256,
+            sedes.bytes4,
+            sedes.uint16,
+        )), max_length=2**32))
+    )
+
+    request_id: int
+    total: int
+    nodes: Tuple[Tuple[NodeID, bytes, int]]
