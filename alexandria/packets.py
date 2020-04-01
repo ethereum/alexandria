@@ -9,7 +9,7 @@ from eth_utils import ValidationError
 import ssz
 from ssz import sedes
 
-from alexandria.abc import MessageAPI, PacketAPI, RegistryAPI, TPacket
+from alexandria.abc import Datagram, Endpoint, MessageAPI, PacketAPI, RegistryAPI, TPacket
 from alexandria.constants import (
     AUTH_SCHEME_NAME,
     AUTH_RESPONSE_VERSION,
@@ -381,6 +381,17 @@ def decode_packet(data: bytes) -> PacketAPI:
         return CompleteHandshakePacket.from_wire_bytes(data[1:])
     else:
         raise TypeError(f"Unknown packet id: {packet_id}")
+
+
+class NetworkPacket(NamedTuple):
+    packet: PacketAPI
+    endpoint: Endpoint
+
+    def as_datagram(self) -> Datagram:
+        return Datagram(
+            data=encode_packet(self.packet),
+            endpoint=self.endpoint,
+        )
 
 
 #

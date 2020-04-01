@@ -1,13 +1,10 @@
 import logging
-from typing import Any, AsyncContextManager, Awaitable, Optional, Set, Type, TypeVar
+from typing import Awaitable, Optional, Set, Type
 from types import TracebackType
 
 import trio
 
-from alexandria.abc import SessionAPI, EventsAPI
-
-
-TAwaitable = TypeVar('TAwaitable', bound=Awaitable[Any])
+from alexandria.abc import SessionAPI, EventsAPI, EventSubscriptionAPI, TAwaitable
 
 
 class ReAwaitable(Awaitable[TAwaitable]):
@@ -26,7 +23,7 @@ class ReAwaitable(Awaitable[TAwaitable]):
         return self._result
 
 
-class EventSubscription(Awaitable[TAwaitable], AsyncContextManager[Awaitable[TAwaitable]]):
+class EventSubscription(EventSubscriptionAPI[TAwaitable]):
     def __init__(self,
                  on_enter: Awaitable[None],
                  get_result: Awaitable[TAwaitable],

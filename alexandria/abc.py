@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
 import ipaddress
 from typing import (
+    Any,
+    AsyncContextManager,
     AsyncIterable,
+    Awaitable,
     Callable,
     ContextManager,
     Generic,
@@ -46,7 +49,7 @@ class Endpoint(NamedTuple):
 
 
 class Datagram(NamedTuple):
-    datagram: bytes
+    data: bytes
     endpoint: Endpoint
 
 
@@ -136,6 +139,16 @@ class SessionAPI(ABC):
         ...
 
 
+class PoolAPI(ABC):
+    @abstractmethod
+    def get_session(self, remote_node_id: NodeID) -> SessionAPI:
+        ...
+
+    @abstractmethod
+    def create_session(self, remote_node_id: NodeID, remote_endpoint: Endpoint) -> SessionAPI:
+        ...
+
+
 TItem = TypeVar('TItem')
 
 
@@ -160,13 +173,20 @@ class NodeAPI(ABC):
         ...
 
 
+TAwaitable = TypeVar('TAwaitable', bound=Awaitable[Any])
+
+
+class EventSubscriptionAPI(Awaitable[TAwaitable], AsyncContextManager[Awaitable[TAwaitable]]):
+    pass
+
+
 class EventsAPI(ABC):
     @abstractmethod
     async def new_session(self, session: SessionAPI) -> None:
         ...
 
     @abstractmethod
-    async def wait_new_session(self) -> SessionAPI:
+    async def wait_new_session(self) -> EventSubscriptionAPI[SessionAPI]:
         ...
 
 

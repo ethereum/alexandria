@@ -8,3 +8,11 @@ class DecryptionError(AlexandriaError):
 
 class HandshakeFailure(AlexandriaError):
     pass
+
+
+class SessionNotFound(AlexandriaError):
+    pass
+
+
+class DuplicateSession(AlexandriaError):
+    pass
