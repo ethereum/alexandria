@@ -90,6 +90,9 @@ class CompleteHandshakePacket(PacketAPI):
         self.header = header
         self.encrypted_message = encrypted_message
 
+    def __str__(self) -> str:
+        return "CompleteHandshakePacket"
+
     @classmethod
     def prepare(cls: Type[TPacket],
                 *,
@@ -237,6 +240,9 @@ class HandshakeResponse(PacketAPI):
         self.id_nonce = id_nonce
         self.public_key = public_key
 
+    def __str__(self) -> str:
+        return "HandshakeResponse"
+
     def to_wire_bytes(self) -> bytes:
         return ssz.encode(
             (self.tag, self.magic, self.token, self.id_nonce, self.public_key.to_compressed_bytes()),  # noqa: E501
@@ -281,6 +287,9 @@ class MessagePacket(PacketAPI):
         self.tag = tag
         self.auth_tag = auth_tag
         self.encrypted_message = encrypted_message
+
+    def __str__(self) -> str:
+        return "MessagePacket"
 
     @classmethod
     def prepare(cls,
@@ -386,6 +395,9 @@ def decode_packet(data: bytes) -> PacketAPI:
 class NetworkPacket(NamedTuple):
     packet: PacketAPI
     endpoint: Endpoint
+
+    def __str__(self) -> str:
+        return f"{self.packet} -> {self.endpoint}"
 
     def as_datagram(self) -> Datagram:
         return Datagram(

@@ -20,13 +20,14 @@ from alexandria.handshake import (
 )
 from alexandria.messages import Message
 from alexandria.packets import (
-    MessagePacket,
-    HandshakeResponse,
     CompleteHandshakePacket,
+    compute_handshake_response_magic,
     get_random_auth_tag,
     get_random_encrypted_data,
     get_random_id_nonce,
-    compute_handshake_response_magic,
+    HandshakeResponse,
+    MessagePacket,
+    NetworkPacket,
 )
 from alexandria.tags import compute_tag, recover_source_id_from_tag
 from alexandria.typing import NodeID, Tag, AES128Key, IDNonce
@@ -222,7 +223,10 @@ class SessionInitiator(BaseSession):
             auth_tag=get_random_auth_tag(),
             encrypted_message=get_random_encrypted_data(),
         )
-        await self._outbound_packet_send_channel.send(self._initiating_packet)
+        await self._outbound_packet_send_channel.send(NetworkPacket(
+            packet=self._initiating_packet,
+            endpoint=self.remote_endpoint,
+        ))
 
     async def receive_handshake_response(self,
                                          packet: HandshakeResponse,
@@ -271,7 +275,10 @@ class SessionInitiator(BaseSession):
             ephemeral_public_key=ephemeral_public_key,
             public_key=self.private_key.public_key,
         )
-        await self._outbound_packet_send_channel.send(complete_handshake_packet)
+        await self._outbound_packet_send_channel.send(NetworkPacket(
+            packet=complete_handshake_packet,
+            endpoint=self.remote_endpoint,
+        ))
 
 
 #
@@ -292,7 +299,10 @@ class SessionRecipient(BaseSession):
                 message=message,
                 key=self._session_keys.encryption_key,
             )
-            await self._outbound_packet_send_channel.send(packet)
+            await self._outbound_packet_send_channel.send(NetworkPacket(
+                packet=packet,
+                endpoint=self.remote_endpoint,
+            ))
         elif self.is_before_handshake:
             self.logger.debug(
                 "%s: outbound message before handshake: %s",
@@ -354,7 +364,10 @@ class SessionRecipient(BaseSession):
             id_nonce=get_random_id_nonce(),
             public_key=self.private_key.public_key,
         )
-        await self._outbound_packet_send_channel.send(self.handshake_response_packet)
+        await self._outbound_packet_send_channel.send(NetworkPacket(
+            packet=self.handshake_response_packet,
+            endpoint=self.remote_endpoint,
+        ))
 
     async def receive_handshake_completion(self, packet: CompleteHandshakePacket) -> None:
         self.logger.debug('%s: received handshake completion', self)

@@ -62,6 +62,7 @@ class SubscriptionManager(Service):
 
     async def run(self) -> None:
         self.manager.run_daemon_task(self._feed_subscriptions, self._receive_channel)
+        await self.manager.wait_finished()
 
     async def _feed_subscriptions(self,
                                   receive_channel: trio.abc.ReceiveChannel[MessageAPI[sedes.Serializable]],  # noqa: E501
@@ -77,6 +78,7 @@ class SubscriptionManager(Service):
                     )
                     for send_channel in channels:
                         nursery.start_soon(send_channel.send, message)
+                    self.logger.info('DID IT')
 
     def subscribe(self, payload_type: Type[TPayload]) -> SubscriptionAPI[MessageAPI[TPayload]]:
         message_id = self._registry.get_message_id(payload_type)

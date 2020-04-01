@@ -8,7 +8,6 @@ from eth_keys import keys
 from alexandria._utils import humanize_node_id, public_key_to_node_id
 from alexandria.abc import (
     Endpoint,
-    EventsAPI,
     MessageAPI,
     PoolAPI,
     SessionAPI,
@@ -29,7 +28,6 @@ class Pool(PoolAPI):
 
     def __init__(self,
                  private_key: keys.PrivateKey,
-                 events: EventsAPI,
                  outbound_packet_send_channel: trio.abc.SendChannel[NetworkPacket],
                  inbound_message_send_channel: trio.abc.SendChannel[MessageAPI],
                  ) -> None:
@@ -37,7 +35,6 @@ class Pool(PoolAPI):
         self.public_key = private_key.public_key
         self.local_node_id = public_key_to_node_id(self.public_key)
         self._sessions = {}
-        self._events = events
 
         self._outbound_packet_send_channel = outbound_packet_send_channel
         self._inbound_message_send_channel = inbound_message_send_channel
@@ -54,26 +51,26 @@ class Pool(PoolAPI):
         if remote_node_id in self._sessions:
             raise DuplicateSession(f"No session found for {humanize_node_id(remote_node_id)}")
 
-            if is_initiator:
-                session = SessionInitiator(
-                    private_key=self._private_key,
-                    remote_node_id=remote_node_id,
-                    remote_endpoint=remote_endpoint,
-                    outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),
-                    inbound_message_send_channel=self._inbound_message_send_channel.clone(),
-                )
-            else:
-                session = SessionRecipient(
-                    private_key=self._private_key,
-                    remote_node_id=remote_node_id,
-                    remote_endpoint=remote_endpoint,
-                    outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),
-                    inbound_message_send_channel=self._inbound_message_send_channel.clone(),
-                )
+        if is_initiator:
+            session = SessionInitiator(
+                private_key=self._private_key,
+                remote_node_id=remote_node_id,
+                remote_endpoint=remote_endpoint,
+                outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),
+                inbound_message_send_channel=self._inbound_message_send_channel.clone(),
+            )
+        else:
+            session = SessionRecipient(
+                private_key=self._private_key,
+                remote_node_id=remote_node_id,
+                remote_endpoint=remote_endpoint,
+                outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),
+                inbound_message_send_channel=self._inbound_message_send_channel.clone(),
+            )
 
-            # We insert the session here to prevent a race condition where an
-            # alternate path to session creation results in a new session being
-            # inserted before the `_manage_session` task can run.
-            self._sessions[remote_node_id] = session
+        # We insert the session here to prevent a race condition where an
+        # alternate path to session creation results in a new session being
+        # inserted before the `_manage_session` task can run.
+        self._sessions[remote_node_id] = session
 
-            return session
+        return session

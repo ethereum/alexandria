@@ -12,15 +12,16 @@ from alexandria.abc import (
     Datagram,
     Endpoint,
     MessageAPI,
-    TPayload,
+    SessionAPI,
     SubscriptionAPI,
+    TPayload,
 )
 from alexandria.datagrams import listen
 from alexandria.exceptions import SessionNotFound
 from alexandria.events import Events
 from alexandria.messages import Message, Ping, Pong
 from alexandria.packets import decode_packet, NetworkPacket
-from alexandrea.pool import Pool
+from alexandria.pool import Pool
 from alexandria.subscriptions import SubscriptionManager
 from alexandria.typing import NodeID
 from alexandria.tags import recover_source_id_from_tag
@@ -76,7 +77,6 @@ class Client(Service, ClientAPI):
         self.events = Events()
         self.pool = Pool(
             private_key=self._private_key,
-            events=self.events,
             outbound_packet_send_channel=self._outbound_packet_send_channel,
             inbound_message_send_channel=self._inbound_message_send_channel,
         )
@@ -101,6 +101,14 @@ class Client(Service, ClientAPI):
                 self._handle_inbound_datagrams,
                 self._inbound_datagram_receive_channel,
             )
+            self.manager.run_daemon_task(
+                self._handle_outbound_messages,
+                self._outbound_message_receive_channel,
+            )
+            self.manager.run_daemon_task(
+                self._handle_outbound_packets,
+                self._outbound_packet_receive_channel,
+            )
             self._listening.set()
             self.logger.info(
                 'Client running: %s@%s',
@@ -119,8 +127,7 @@ class Client(Service, ClientAPI):
             node_id=remote_node_id,
             endpoint=remote_endpoint,
         )
-        session = self._get_session(remote_node_id, remote_endpoint, is_initiator=True)
-        await session.handle_outbound_message(message)
+        await self._outbound_message_send_channel.send(message)
 
     async def pong(self, ping_id: int, remote_node_id: NodeID, remote_endpoint: Endpoint) -> None:
         payload = Pong(ping_id=ping_id)
@@ -129,15 +136,46 @@ class Client(Service, ClientAPI):
             node_id=remote_node_id,
             endpoint=remote_endpoint,
         )
-        session = self._get_session(remote_node_id, remote_endpoint, is_initiator=True)
-        await session.handle_outbound_message(message)
+        await self._outbound_message_send_channel.send(message)
+
+    async def _get_or_create_session(self,
+                                     node_id: NodeID,
+                                     endpoint: Endpoint,
+                                     *,
+                                     is_initiator: bool) -> SessionAPI:
+        try:
+            session = self.pool.get_session(node_id)
+        except SessionNotFound:
+            session = self.pool.create_session(
+                node_id,
+                endpoint,
+                is_initiator=is_initiator,
+            )
+            await self.events.new_session(session)
+
+        return session
+
+    async def _handle_outbound_messages(self,
+                                        receive_channel: trio.abc.ReceiveChannel[MessageAPI],
+                                        ) -> None:
+        async with trio.open_nursery() as nursery:
+            async with receive_channel:
+                async for message in receive_channel:
+                    session = await self._get_or_create_session(
+                        message.node_id,
+                        message.endpoint,
+                        is_initiator=True,
+                    )
+                    nursery.start_soon(session.handle_outbound_message, message)
+                    self.logger.debug('Dispatching outbound message: %s', message)
 
     async def _handle_outbound_packets(self,
-                                       receive_channel: trio.abc.ReceiveChannel[NetworkPacket]):
+                                       receive_channel: trio.abc.ReceiveChannel[NetworkPacket],
+                                       ) -> None:
         async with receive_channel:
             async for packet in receive_channel:
                 await self._outbound_datagram_send_channel.send(packet.as_datagram())
-                self.logger.debug('Dispatching outbound packet from %s', packet.endpoint)
+                self.logger.debug('Dispatching outbound packet: %s', packet)
 
     async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram]):
         async with trio.open_nursery() as nursery:
@@ -145,14 +183,11 @@ class Client(Service, ClientAPI):
                 async for datagram in receive_channel:
                     packet = decode_packet(datagram.data)
                     remote_node_id = recover_source_id_from_tag(packet.tag, self.local_node_id)
-                    try:
-                        session = self.pool.get_session(remote_node_id)
-                    except SessionNotFound:
-                        session = self.pool.create_session(
-                            remote_node_id,
-                            datagram.endpoint,
-                            is_initiator=False,
-                        )
+                    session = await self._get_or_create_session(
+                        remote_node_id,
+                        datagram.endpoint,
+                        is_initiator=False,
+                    )
 
                     nursery.start_soon(session.handle_inbound_packet, packet)
                     self.logger.debug('Dispatching inbound packet to %s', session)

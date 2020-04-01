@@ -4,6 +4,7 @@ from typing import (
 )
 
 from async_generator import asynccontextmanager
+from eth_utils import humanize_hash
 import trio
 
 from alexandria.abc import (
@@ -23,7 +24,7 @@ async def _handle_inbound(socket: trio.socket.SocketType,
             data, (ip_address, port) = await socket.recvfrom(DATAGRAM_BUFFER_SIZE)
             endpoint = Endpoint(ip_address, port)
             inbound_datagram = Datagram(data, endpoint)
-            logger.debug('handling inbound datagram: %s', inbound_datagram)
+            logger.debug('handling inbound datagram: %s -> %s', humanize_hash(data), endpoint)
             try:
                 await send_channel.send(inbound_datagram)
             except trio.BrokenResourceError:
@@ -34,9 +35,9 @@ async def _handle_outbound(socket: trio.socket.SocketType,
                            receive_channel: trio.abc.SendChannel[Datagram],
                            ) -> None:
     async with receive_channel:
-        async for datagram, endpoint in receive_channel:
-            logger.debug('handling outbound datagram: %s', (datagram, endpoint))
-            await socket.sendto(datagram, endpoint)
+        async for data, endpoint in receive_channel:
+            logger.debug('handling outbound datagram: %s -> %s', humanize_hash(data), endpoint)
+            await socket.sendto(data, endpoint)
 
 
 @asynccontextmanager

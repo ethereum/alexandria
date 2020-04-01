@@ -9,6 +9,7 @@ from alexandria.tools import driver
 from alexandria.tools.factories import ClientFactory, EndpointFactory
 
 
+@pytest.mark.skip(reason='Driver API not implemented yet')
 @pytest.mark.trio
 async def test_client_connect(nursery):
     alice_endpoint = EndpointFactory(ip_address='127.0.0.1')

@@ -41,9 +41,12 @@ async def test_client_connect():
             assert payload.id == 1234
 
         with alice.subscribe(Pong) as subscription:
+            logger.info('BEFORE PONG SEND------------------------------------------------------------------')
             await bob.pong(1234, alice.local_node_id, alice_endpoint)
 
+            logger.info('BEFORE SUB WAIT------------------------------------------------------------------')
             pong_msg = await subscription.receive()
+            logger.info('AFTER SUB WAIT')
             assert isinstance(pong_msg, Message)
             payload = pong_msg.payload
             assert isinstance(payload, Pong)

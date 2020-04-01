@@ -1,11 +1,17 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 import logging
-from typing import Any, Sequence
+from typing import Any, Awaitable, Callable, Sequence
 
+import trio
 from async_service import Service
+
+from alexandria.abc import Endpoint, Datagram, PacketAPI, MessageAPI
+from alexandria.datagram import listen as datagram_listen
 
 
 class DriverAPI(ABC):
+    instruction_nursery: trio.Nursery
+
     outbound_datagram_send_channel: trio.abc.SendChannel[Datagram]
     outbound_datagram_receive_channel: trio.abc.ReceiveChannel[Datagram]
     inbound_datagram_send_channel: trio.abc.SendChannel[Datagram]
@@ -22,16 +28,7 @@ class DriverAPI(ABC):
     inbound_message_receive_channel: trio.abc.ReceiveChannel[MessageAPI]
 
 
-class Instruction(Callable[[], Any]):
-    def __init__(self, callback_fn: Callable[[], Any]) -> None:
-        self._callback_fn = callback_fn
-
-    def __call__(self) -> Any:
-        return self._callback_fn
-
-
-class DriverState:
-    def __init__(self):
+Instruction = Callable[[DriverAPI], Awaitable[Any]]
 
 
 class Driver(Service):
@@ -78,15 +75,41 @@ class Driver(Service):
 
         self.logger.info('%s: Starting with %d instructions.', self._name, len(self._instructions))
         for index, instruction in enumerate(self._instructions):
-            self.logger.debug('%s: Executing instruction #{index} - {instruction}', self, index, instruction)
+            self.logger.debug(
+                '%s: Executing instruction #{index} - {instruction}',
+                self,
+                index,
+                instruction,
+            )
             raise NotImplementedError
 
 
-async def listen(alice_endpoint):
-    pass
+def listen(alice_endpoint: Endpoint):
+    async def listen_instruction(driver: DriverAPI):
+        listening = trio.Event()
+        manager = driver.get_manager()
 
-async def send_message(Ping(1234)):
-    pass
+        async def _do_listen():
+            listener = datagram_listen(
+                alice_endpoint,
+                driver.inbound_datagram_send_channel,
+                driver.outbound_datagram_receive_channel,
+            )
+            async with listener:
+                listening.set()
+                await manager.wait_finished()
+        driver.instruction_nursery.start_soon(_do_listen)
+        await listening.wait()
+    return listen_instruction
 
-async def wait_for_message(Pong):
-    pass
+
+def send_message(message: MessageAPI):
+    async def send_message_instruction(driver: DriverAPI):
+        raise NotImplementedError
+    return send_message_instruction
+
+
+def wait_for_message(Pong):
+    async def wait_for_message_instruction(driver: DriverAPI):
+        raise NotImplementedError
+    return wait_for_message_instruction
