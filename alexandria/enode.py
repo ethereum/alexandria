@@ -49,10 +49,10 @@ def validate_enode_uri(enode: str, require_ip: bool = False) -> None:
         raise ValidationError(str(e))
 
 
-TNode = TypeVar('TNode')
+TENode = TypeVar('TENode')
 
 
-class Node:
+class ENode:
     public_key: keys.PublicKey
     endpoint: Endpoint
 
@@ -75,7 +75,7 @@ class Node:
         return f'enode://{public_key_as_hex}@{self.endpoint}'
 
     @classmethod
-    def from_enode_uri(cls: Type[TNode], uri: str) -> TNode:
+    def from_enode_uri(cls: Type[TENode], uri: str) -> TENode:
         validate_enode_uri(uri)  # Be no more permissive than the validation
         parsed = urlparse.urlparse(uri)
         pubkey = keys.PublicKey(decode_hex(parsed.username))

@@ -30,7 +30,7 @@ class MessageDispatcher(Service):
 
     _subscriptions: DefaultDict[int, Set[trio.abc.SendChannel[MessageAPI[sedes.Serializable]]]]
     _response_channels: DefaultDict[int, Set[trio.abc.SendChannel[MessageAPI[sedes.Serializable]]]]
-    _reserved_request_ids: Set[Tuple[NodeID, int]]
+    _response_channels: Set[Tuple[NodeID, int]]
 
     def __init__(self,
                  outbound_message_send_channel: trio.abc.SendChannel[MessageAPI[sedes.Serializable]],  # noqa: E501
@@ -53,7 +53,7 @@ class MessageDispatcher(Service):
     def get_free_request_id(self, node_id: NodeID) -> int:
         for _ in range(MAX_REQUEST_ID_ATTEMPTS):
             request_id = get_random_request_id()
-            if (node_id, request_id) not in self._reserved_request_ids:
+            if (node_id, request_id) not in self._response_channels:
                 return request_id
         else:
             # this should be extremely unlikely to happen
@@ -130,7 +130,7 @@ class MessageDispatcher(Service):
         self._response_channels[key] = send_channel
 
         subscription = Subscription(
-            lambda: self._response_channels[key].pop(key),
+            lambda: self._response_channels.pop(key),
             receive_channel,
         )
         self.manager.run_task(

@@ -12,6 +12,7 @@ except ImportError as err:
     ) from err
 
 
+from alexandria.app import Application
 from alexandria.client import Client, Endpoint
 from alexandria.constants import KEY_BYTE_SIZE
 
@@ -59,5 +60,14 @@ class ClientFactory(factory.Factory):
     class Meta:
         model = Client
 
+    private_key = factory.SubFactory(PrivateKeyFactory)
+    listen_on = factory.SubFactory(EndpointFactory)
+
+
+class ApplicationFactory(factory.Factory):
+    class Meta:
+        model = Application
+
+    bootnodes = factory.LazyFunction(lambda: tuple())
     private_key = factory.SubFactory(PrivateKeyFactory)
     listen_on = factory.SubFactory(EndpointFactory)

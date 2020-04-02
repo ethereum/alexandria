@@ -21,8 +21,8 @@ async def alice_and_bob():
     logger.info('ALICE: %s', humanize_hash(alice.local_node_id.to_bytes(32, 'big')))
     logger.info('BOB: %s', humanize_hash(bob.local_node_id.to_bytes(32, 'big')))
 
-    alice_listening = alice.events.listening.wait()
-    bob_listening = bob.events.listening.wait()
+    alice_listening = alice.events.listening.subscribe()
+    bob_listening = bob.events.listening.subscribe()
     async with alice_listening, bob_listening:
         async with background_trio_service(bob), background_trio_service(alice):
             await alice_listening
@@ -39,7 +39,7 @@ async def test_client_connect(alice_and_bob):
     bob_endpoint = EndpointFactory(ip_address='127.0.0.1', port=bob.listen_on.port)
 
     with bob.message_dispatcher.subscribe(Ping) as subscription:
-        async with bob.events.new_session.wait() as dial_in_from_alice:
+        async with bob.events.new_session.subscribe() as dial_in_from_alice:
             message = Message(Ping(1234), bob.local_node_id, bob_endpoint)
             await alice.message_dispatcher.send_message(message)
 

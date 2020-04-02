@@ -181,15 +181,9 @@ class SubscriptionAPI(ContextManager['SubscriptionAPI["TItem"]'], Awaitable[TIte
         ...
 
 
-class NodeAPI(ABC):
-    id: NodeID
-    address: ipaddress.IPv4Address
-    port: int
-
-    @property
-    @abstractmethod
-    def public_key(self) -> keys.PublicKey:
-        ...
+class Node(NamedTuple):
+    node_id: NodeID
+    endpoint: Endpoint
 
 
 TAwaitable = TypeVar('TAwaitable', bound=Awaitable[Any])
@@ -208,7 +202,7 @@ class EventAPI(Generic[TEventPayload]):
         ...
 
     @abstractmethod
-    def wait(self) -> EventSubscriptionAPI[TEventPayload]:
+    def subscribe(self) -> EventSubscriptionAPI[TEventPayload]:
         ...
 
 
@@ -220,13 +214,24 @@ class EventsAPI(ABC):
 
 class MessageDispatcherAPI(ServiceAPI):
     @abstractmethod
+    def get_free_request_id(self, node_id: NodeID) -> int:
+        ...
+
+    @abstractmethod
     def subscribe(self, payload_type: Type[TPayload]) -> SubscriptionAPI[MessageAPI[TPayload]]:
+        ...
+
+    @abstractmethod
+    def request(self,
+                message: MessageAPI,
+                response_payload_type: Type[TPayload]) -> MessageAPI[TPayload]:
         ...
 
     @abstractmethod
     def request_response(self,
                          message: MessageAPI,
-                         response_payload_type: Type[TPayload]) -> MessageAPI[TPayload]:
+                         response_payload_type: Type[TPayload],
+                         ) -> SubscriptionAPI[MessageAPI[TPayload]]:
         ...
 
 

@@ -8,6 +8,8 @@ class MemoryEndpointDB(EndpointDatabaseAPI):
     _db: Mapping[NodeID, Endpoint]
 
     def __init__(self, db: Mapping[NodeID, Endpoint] = None) -> None:
+        if db is None:
+            db = {}
         self._db = db
 
     def has_endpoint(self, node_id: NodeID) -> bool:

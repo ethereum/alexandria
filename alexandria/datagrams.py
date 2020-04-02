@@ -37,7 +37,7 @@ async def _handle_outbound(socket: trio.socket.SocketType,
     async with receive_channel:
         async for data, endpoint in receive_channel:
             logger.debug('handling outbound datagram: %s -> %s', humanize_hash(data), endpoint)
-            await socket.sendto(data, endpoint)
+            await socket.sendto(data, (str(endpoint.ip_address), endpoint.port))
 
 
 @asynccontextmanager

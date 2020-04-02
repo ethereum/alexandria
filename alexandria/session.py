@@ -146,8 +146,16 @@ class SessionInitiator(BaseSession):
     async def handle_outbound_message(self, message: MessageAPI) -> None:
         if self.is_handshake_complete:
             self.logger.debug("%s: sending message: %s", self, message)
-            # TODO: construct MessagePacket
-            raise NotImplementedError
+            packet = MessagePacket.prepare(
+                tag=self.tag,
+                auth_tag=get_random_auth_tag(),
+                message=message,
+                key=self._session_keys.encryption_key,
+            )
+            await self._outbound_packet_send_channel.send(NetworkPacket(
+                packet=packet,
+                endpoint=self.remote_endpoint,
+            ))
         elif self.is_before_handshake:
             self.logger.debug(
                 "%s: outbound message triggered handshake initiation: %s",
@@ -199,6 +207,8 @@ class SessionInitiator(BaseSession):
                     packet
                 )
                 self._status = SessionStatus.AFTER
+                await self._events.handshake_complete.trigger(self)
+
                 await self.send_handshake_completion(
                     self._session_keys,
                     ephemeral_public_key,
@@ -329,7 +339,25 @@ class SessionRecipient(BaseSession):
     #
     async def handle_inbound_packet(self, packet: PacketAPI) -> None:
         if self.is_handshake_complete:
-            raise NotImplementedError
+            if isinstance(packet, MessagePacket):
+                payload = packet.decrypt_payload(self._session_keys.decryption_key)
+                message = Message(
+                    payload=payload,
+                    node_id=self.remote_node_id,
+                    endpoint=self.remote_endpoint,
+                )
+                self.logger.debug(
+                    '%s: processed inbound message packet: %s',
+                    self,
+                    message,
+                )
+                await self._inbound_message_send_channel.send(message)
+            else:
+                self.logger.debug(
+                    '%s: Ignoring packet of type %s received after handshake complete',
+                    self,
+                    type(packet),
+                )
         elif self.is_before_handshake:
             if isinstance(packet, MessagePacket):
                 await self.receive_handshake_initiation(packet)
@@ -340,6 +368,7 @@ class SessionRecipient(BaseSession):
         elif self.is_during_handshake:
             self._session_keys = await self.receive_handshake_completion(packet)
             self._status = SessionStatus.AFTER
+            await self._events.handshake_complete.trigger(self)
         else:
             raise Exception("Invalid state")
 

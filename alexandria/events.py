@@ -1,3 +1,4 @@
+import logging
 from typing import AsyncIterable, Awaitable, Callable, Optional, Set, Type
 from types import TracebackType
 
@@ -68,19 +69,25 @@ class EventSubscription(EventSubscriptionAPI[TAwaitable]):
 
 
 class Event(EventAPI[TEventPayload]):
+    logger = logging.getLogger('alexandria.events.Event')
+
     _channels: Set[trio.abc.SendChannel[TEventPayload]]
 
-    def __init__(self) -> None:
+    def __init__(self, name: str) -> None:
+        self.name = name
         self._lock = trio.Lock()
         self._channels = set()
 
     async def trigger(self, payload: TEventPayload) -> None:
-        async with self._lock:
-            for send_channel in self._channels:
-                await send_channel.send(payload)
+        self.logger.debug('Triggering event: %s', self.name)
+        with trio.fail_after(1):
+            async with self._lock:
+                for send_channel in self._channels:
+                    await send_channel.send(payload)
+        self.logger.debug('Finished triggering event: %s', self.name)
 
-    def wait(self) -> EventSubscriptionAPI[TEventPayload]:
-        send_channel, receive_channel = trio.open_memory_channel[SessionAPI](0)
+    def subscribe(self) -> EventSubscriptionAPI[TEventPayload]:
+        send_channel, receive_channel = trio.open_memory_channel[SessionAPI](256)
 
         self._channels.add(send_channel)
 
@@ -93,6 +100,6 @@ class Event(EventAPI[TEventPayload]):
 
 class Events(EventsAPI):
     def __init__(self) -> None:
-        self.new_session: Event[SessionAPI] = Event()
-        self.handshake_complete: Event[SessionAPI] = Event()
-        self.listening: Event[Endpoint] = Event()
+        self.new_session: Event[SessionAPI] = Event('NEW_SESSION')
+        self.handshake_complete: Event[SessionAPI] = Event('HANDSHAKE_COMPLETE')
+        self.listening: Event[Endpoint] = Event('LISTENING')

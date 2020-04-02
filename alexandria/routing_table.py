@@ -4,12 +4,10 @@ import itertools
 import logging
 from typing import Deque, Generator, Tuple
 
-from eth_utils import (
-    encode_hex,
-)
-
-from .constants import KEY_BIT_SIZE
-from .typing import NodeID
+from alexandria._utils import humanize_node_id
+from alexandria.abc import RoutingTableAPI
+from alexandria.constants import KEY_BIT_SIZE
+from alexandria.typing import NodeID
 
 
 def compute_distance(left_node_id: NodeID, right_node_id: NodeID) -> int:
@@ -23,7 +21,7 @@ def compute_log_distance(left_node_id: NodeID, right_node_id: NodeID) -> int:
     return distance.bit_length()
 
 
-class RoutingTable:
+class RoutingTable(RoutingTableAPI):
     logger = logging.getLogger("p2p.discv5.routing_table.KademliaRoutingTable")
 
     def __init__(self, center_node_id: NodeID, bucket_size: int, num_bits=KEY_BIT_SIZE) -> None:
@@ -66,24 +64,24 @@ class RoutingTable:
         is_node_in_bucket = node_id in bucket
 
         if not is_node_in_bucket and not is_bucket_full:
-            self.logger.debug("Adding %s to bucket %d", encode_hex(node_id), bucket_index)
+            self.logger.debug("Adding %s to bucket %d", humanize_node_id(node_id), bucket_index)
             self.update_bucket_unchecked(node_id)
             eviction_candidate = None
         elif is_node_in_bucket:
-            self.logger.debug("Updating %s in bucket %d", encode_hex(node_id), bucket_index)
+            self.logger.debug("Updating %s in bucket %d", humanize_node_id(node_id), bucket_index)
             self.update_bucket_unchecked(node_id)
             eviction_candidate = None
         elif not is_node_in_bucket and is_bucket_full:
             if node_id not in replacement_cache:
                 self.logger.debug(
                     "Adding %s to replacement cache of bucket %d",
-                    encode_hex(node_id),
+                    humanize_node_id(node_id),
                     bucket_index,
                 )
             else:
                 self.logger.debug(
                     "Updating %s in replacement cache of bucket %d",
-                    encode_hex(node_id),
+                    humanize_node_id(node_id),
                     bucket_index,
                 )
                 replacement_cache.remove(node_id)
@@ -131,22 +129,22 @@ class RoutingTable:
                 replacement_node_id = replacement_cache.popleft()
                 self.logger.debug(
                     "Replacing %s from bucket %d with %s from replacement cache",
-                    encode_hex(node_id),
+                    humanize_node_id(node_id),
                     bucket_index,
-                    encode_hex(replacement_node_id),
+                    humanize_node_id(replacement_node_id),
                 )
                 bucket.append(replacement_node_id)
             else:
                 self.logger.debug(
                     "Removing %s from bucket %d without replacement",
-                    encode_hex(node_id),
+                    humanize_node_id(node_id),
                     bucket_index,
                 )
 
         if in_replacement_cache:
             self.logger.debug(
                 "Removing %s from replacement cache of bucket %d",
-                encode_hex(node_id),
+                humanize_node_id(node_id),
                 bucket_index,
             )
             replacement_cache.remove(node_id)
@@ -154,7 +152,7 @@ class RoutingTable:
         if not in_bucket and not in_replacement_cache:
             self.logger.debug(
                 "Not removing %s as it is neither present in the bucket nor the replacement cache",
-                encode_hex(node_id),
+                humanize_node_id(node_id),
                 bucket_index,
             )
 
