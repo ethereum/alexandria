@@ -49,6 +49,20 @@ class Endpoint(NamedTuple):
         return f"{self.ip_address}:{self.port}"
 
 
+class EndpointDatabaseAPI:
+    @abstractmethod
+    def has_endpoint(self, node_id: NodeID) -> bool:
+        ...
+
+    @abstractmethod
+    def get_endpoint(self, node_id: NodeID) -> Endpoint:
+        ...
+
+    @abstractmethod
+    def set_endpoint(self, node_id: NodeID, endpoint: Endpoint) -> None:
+        ...
+
+
 class Datagram(NamedTuple):
     data: bytes
     endpoint: Endpoint
@@ -157,7 +171,7 @@ class PoolAPI(ABC):
 TItem = TypeVar('TItem')
 
 
-class SubscriptionAPI(ContextManager['SubscriptionAPI["TItem"]'], Generic[TItem]):
+class SubscriptionAPI(ContextManager['SubscriptionAPI["TItem"]'], Awaitable[TItem]):
     @abstractmethod
     async def receive(self) -> TItem:
         ...
@@ -185,14 +199,23 @@ class EventSubscriptionAPI(Awaitable[TAwaitable], AsyncContextManager[Awaitable[
     pass
 
 
-class EventsAPI(ABC):
+TEventPayload = TypeVar('TEventPayload')
+
+
+class EventAPI(Generic[TEventPayload]):
     @abstractmethod
-    async def new_session(self, session: SessionAPI) -> None:
+    async def trigger(self, payload: TEventPayload) -> None:
         ...
 
     @abstractmethod
-    async def wait_new_session(self) -> EventSubscriptionAPI[SessionAPI]:
+    def wait(self) -> EventSubscriptionAPI[TEventPayload]:
         ...
+
+
+class EventsAPI(ABC):
+    new_session: EventAPI
+    listening: EventAPI
+    handshake_complete: EventAPI
 
 
 class MessageDispatcherAPI(ServiceAPI):
@@ -230,8 +253,8 @@ class RoutingTableAPI(ABC):
     def get_nodes_at_log_distance(self, log_distance: int) -> Tuple[NodeID, ...]:
         ...
 
-    @abstractmethod
     @property
+    @abstractmethod
     def is_empty(self) -> bool:
         ...
 

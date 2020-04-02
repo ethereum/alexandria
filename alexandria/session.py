@@ -10,7 +10,7 @@ from ssz import sedes
 import trio
 
 from alexandria._utils import humanize_node_id
-from alexandria.abc import Endpoint, MessageAPI, PacketAPI, SessionAPI
+from alexandria.abc import Endpoint, EventsAPI, MessageAPI, PacketAPI, SessionAPI
 from alexandria.exceptions import HandshakeFailure, DecryptionError
 from alexandria.handshake import (
     compute_session_keys,
@@ -46,6 +46,7 @@ class BaseSession(SessionAPI):
                  private_key: keys.PrivateKey,
                  remote_node_id: NodeID,
                  remote_endpoint: Endpoint,
+                 events: EventsAPI,
                  outbound_packet_send_channel: trio.abc.SendChannel[PacketAPI],
                  inbound_message_send_channel: trio.abc.SendChannel[MessageAPI[sedes.Serializable]],
                  ) -> None:
@@ -53,8 +54,10 @@ class BaseSession(SessionAPI):
         self._remote_node_id = remote_node_id
         self._remote_endpoint = remote_endpoint
         self._status = SessionStatus.BEFORE
-        self._outbound_message_buffer_channels = trio.open_memory_channel[MessageAPI](256)
 
+        self._events = events
+
+        self._outbound_message_buffer_channels = trio.open_memory_channel[MessageAPI](256)
         self._inbound_packet_buffer_channels = trio.open_memory_channel[PacketAPI](256)
 
         # TODO

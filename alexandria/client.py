@@ -35,7 +35,6 @@ class Client(Service, ClientAPI):
         self.local_node_id = public_key_to_node_id(self.public_key)
 
         self.listen_on = listen_on
-        self._listening = trio.Event()
 
         # Datagrams
         (
@@ -70,6 +69,7 @@ class Client(Service, ClientAPI):
         self.events = Events()
         self.pool = Pool(
             private_key=self._private_key,
+            events=self.events,
             outbound_packet_send_channel=self._outbound_packet_send_channel,
             inbound_message_send_channel=self._inbound_message_send_channel,
         )
@@ -78,9 +78,6 @@ class Client(Service, ClientAPI):
             self._outbound_message_send_channel,
             self._inbound_message_receive_channel,
         )
-
-    async def wait_listening(self) -> None:
-        await self._listening.wait()
 
     async def run(self) -> None:
         # Run the subscription manager with gets fed all decoded inbound
@@ -93,6 +90,8 @@ class Client(Service, ClientAPI):
             self._outbound_datagram_receive_channel,
         )
         async with listener:
+            await self.events.listening.trigger(self.listen_on)
+
             self.manager.run_daemon_task(
                 self._handle_inbound_datagrams,
                 self._inbound_datagram_receive_channel,
@@ -105,7 +104,6 @@ class Client(Service, ClientAPI):
                 self._handle_outbound_packets,
                 self._outbound_packet_receive_channel,
             )
-            self._listening.set()
             self.logger.info(
                 'Client running: %s@%s',
                 humanize_node_id(self.local_node_id),
@@ -126,7 +124,7 @@ class Client(Service, ClientAPI):
                 endpoint,
                 is_initiator=is_initiator,
             )
-            await self.events.new_session(session)
+            await self.events.new_session.trigger(session)
 
         return session
 

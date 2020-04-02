@@ -31,6 +31,9 @@ class Subscription(ContextManager['Subscription[TItem]'], Generic[TItem]):
                  ) -> None:
         self._remove_fn()
 
+    def __await__(self) -> TItem:
+        return self.receive().__await__()
+
     async def receive(self) -> TItem:
         return await self._receive_channel.receive()
 

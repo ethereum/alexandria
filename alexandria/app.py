@@ -9,6 +9,8 @@ from alexandria.abc import Endpoint
 from alexandria.client import Client
 from alexandria.enode import Node
 from alexandria.messages import Message, Ping, Pong
+from alexandria.routing_table import RoutingTable
+from alexandria.routing_table_manager import RoutingTableManager
 
 
 BOND_TIMEOUT = 10

@@ -1,10 +1,16 @@
-import logging
-from typing import Awaitable, Optional, Set, Type
+from typing import AsyncIterable, Awaitable, Callable, Optional, Set, Type
 from types import TracebackType
 
 import trio
 
-from alexandria.abc import SessionAPI, EventsAPI, EventSubscriptionAPI, TAwaitable
+from alexandria.abc import (
+    SessionAPI,
+    EventAPI,
+    EventsAPI,
+    EventSubscriptionAPI,
+    TAwaitable,
+    TEventPayload,
+)
 
 
 class ReAwaitable(Awaitable[TAwaitable]):
@@ -25,63 +31,68 @@ class ReAwaitable(Awaitable[TAwaitable]):
 
 class EventSubscription(EventSubscriptionAPI[TAwaitable]):
     def __init__(self,
-                 on_enter: Awaitable[None],
-                 get_result: Awaitable[TAwaitable],
-                 on_exit: Awaitable[None],
+                 lock: trio.Lock,
+                 remove_fn: Callable[[], None],
+                 receive_channel: trio.abc.ReceiveChannel[TAwaitable],
                  ) -> None:
-        self._on_enter = on_enter
-        self._get_result = ReAwaitable(get_result)
-        self._on_exit = on_exit
+        self._lock = lock
+        self._remove_fn = remove_fn
+        self._receive_channel = receive_channel
 
     def __await__(self) -> TAwaitable:
-        return self._do_await.__await__()
+        return self.receive().__await__()
 
-    async def _do_await(self) -> TAwaitable:
-        async with self:
-            return await self._get_result
+    async def __aiter__(self) -> AsyncIterable[TAwaitable]:
+        async for payload in self.stream():
+            yield payload
+
+    async def receive(self) -> TAwaitable:
+        return await self._receive_channel.receive()
+
+    async def stream(self) -> AsyncIterable[TAwaitable]:
+        async with self._receive_channel:
+            async for payload in self._receive_channel:
+                yield payload
 
     async def __aenter__(self) -> Awaitable[TAwaitable]:
         await trio.hazmat.checkpoint()
-        await self._on_enter
-        return self._get_result
+        return self
 
     async def __aexit__(self,
                         exc_type: Optional[Type[BaseException]],
                         exc_value: Optional[BaseException],
                         traceback: Optional[TracebackType],
                         ) -> None:
-        if exc_type is None and not self._get_result.is_done:
-            await self._get_result
-        await self._on_exit
+        async with self._lock:
+            self._remove_fn()
+
+
+class Event(EventAPI[TEventPayload]):
+    _channels: Set[trio.abc.SendChannel[TEventPayload]]
+
+    def __init__(self) -> None:
+        self._lock = trio.Lock()
+        self._channels = set()
+
+    async def trigger(self, payload: TEventPayload) -> None:
+        async with self._lock:
+            for send_channel in self._channels:
+                await send_channel.send(payload)
+
+    def wait(self) -> EventSubscriptionAPI[TEventPayload]:
+        send_channel, receive_channel = trio.open_memory_channel[SessionAPI](0)
+
+        self._channels.add(send_channel)
+
+        return EventSubscription(
+            self._lock,
+            lambda: self._channels.remove(send_channel),
+            receive_channel,
+        )
 
 
 class Events(EventsAPI):
-    logger = logging.getLogger('alexandra.client.Events')
-    _new_session_send_channels: Set[trio.abc.SendChannel[SessionAPI]]
-
     def __init__(self) -> None:
-        self._new_session_send_channels = set()
-        self._new_session_lock = trio.Lock()
-
-    async def new_session(self, session: SessionAPI) -> None:
-        self.logger.warning('events:NEW_CONNECTION.triggering: %s', id(self))
-        async with self._new_session_lock:
-            for send_channel in self._new_session_send_channels:
-                await send_channel.send(session)
-
-    def wait_new_session(self) -> EventSubscription[SessionAPI]:
-        send_channel, receive_channel = trio.open_memory_channel[SessionAPI](0)
-
-        async def on_enter():
-            async with self._new_session_lock:
-                self._new_session_send_channels.add(send_channel)
-
-        async def get_result():
-            async with receive_channel:
-                return await receive_channel.receive()
-
-        async def on_exit():
-            async with self._new_session_lock:
-                self._new_session_send_channels.remove(send_channel)
-
-        return EventSubscription(on_enter(), get_result(), on_exit())
+        self.new_session: Event[SessionAPI] = Event()
+        self.handshake_complete: Event[SessionAPI] = Event()
+        self.listening: Event[Endpoint] = Event()

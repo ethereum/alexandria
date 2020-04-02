@@ -42,6 +42,7 @@ class RoutingTableManager(Service):
     async def run(self) -> None:
         self.manager.run_daemon_task(self._pong_when_pinged)
         self.manager.run_daemon_task(self._ping_occasionally)
+        self.manager.run_daemon_task(self._lookup_occasionally)
         self.manager.run_daemon_task(self._handle_lookup)
 
     async def _handle_lookup(self) -> None:
@@ -92,6 +93,7 @@ class RoutingTableManager(Service):
             nodes = await self.find_nodes(target_node_id)
             for node_id, ip_address, port in nodes:
                 endpoint = Endpoint(ipaddress.IPv4Address(ip_address), port)
+                # ping them so that we get a record of them in our database?
                 await self.message_dispatcher.send_message(Message(
                     Ping(self.message_dispatcher.get_free_request_id(node_id)),
                     node_id,
@@ -170,13 +172,23 @@ class RoutingTableManager(Service):
                         session.remote_endpoint,
                     )
                     self.logger.debug("Pinging %s", humanize_node_id(node_id))
-                    await self.message_dispatcher.send_message(message)
+                    with trio.move_on_after(10) as scope:
+                        await self.message_dispatcher.request(message, Pong)
+
+                    if scope.cancelled_caught:
+                        self.routing_table.remove(node_id)
+                    else:
+                        break
             else:
                 self.logger.warning("Routing table is empty, no one to ping")
 
     async def _pong_when_pinged(self) -> None:
         with self.message_dispatcher.subscribe(Ping) as subscription:
             async for message in subscription.stream():
+                self.logger.debug(
+                    "Got ping from %s, responding with pong",
+                    humanize_node_id(message.node_id),
+                )
                 response = Message(
                     Pong(message.payload.request_id),
                     message.node_id,

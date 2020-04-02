@@ -5,7 +5,6 @@ import logging
 from typing import Deque, Generator, Tuple
 
 from eth_utils import (
-    big_endian_to_int,
     encode_hex,
 )
 

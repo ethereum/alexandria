@@ -127,16 +127,17 @@ class MessageDispatcher(Service):
 
         send_channel, receive_channel = trio.open_memory_channel[MessageAPI[TPayload]](256)
         key = (node_id, request_id)
-        self._pending_request_channels[key] = send_channel
+        self._response_channels[key] = send_channel
 
         subscription = Subscription(
-            lambda: self._pending_request_channels.pop(key),
+            lambda: self._response_channels[key].pop(key),
             receive_channel,
         )
         self.manager.run_task(
             self._manage_request_response,
             message,
             response_payload_type,
+            send_channel,
         )
         return subscription
 
