@@ -22,26 +22,13 @@ from alexandria.constants import (
 )
 from alexandria.encryption import aesgcm_encrypt, aesgcm_decrypt
 from alexandria.messages import default_registry
+from alexandria.sedes import byte_list
 from alexandria.typing import Tag, NodeID, Nonce, IDNonce, AES128Key
 
 
 bytes12 = sedes.ByteVector(12)
 bytes33 = sedes.ByteVector(33)
 bytes64 = sedes.ByteVector(64)
-
-
-class ByteList(sedes.List):
-    def __init__(self, max_length: int) -> None:
-        super().__init__(element_sedes=sedes.uint, max_length=max_length)
-
-    def serialize(self, value: bytes):
-        return value
-
-    def deserialize(self, value: bytes):
-        return value
-
-
-byte_list = ByteList(2**32)
 
 
 class AuthHeader(NamedTuple):
