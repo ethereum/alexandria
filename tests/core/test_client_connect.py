@@ -40,12 +40,16 @@ async def test_client_connect(alice_and_bob):
 
     with bob.message_dispatcher.subscribe(Ping) as subscription:
         async with bob.events.new_session.subscribe() as dial_in_from_alice:
-            message = Message(Ping(1234), bob.local_node_id, bob_endpoint)
-            await alice.message_dispatcher.send_message(message)
+            async with bob.events.handshake_complete.subscribe() as handshake_complete:
+                message = Message(Ping(1234), bob.local_node_id, bob_endpoint)
+                await alice.message_dispatcher.send_message(message)
 
-            with trio.fail_after(1):
-                alice_session = await dial_in_from_alice
-            assert alice_session.remote_node_id == alice.local_node_id
+                with trio.fail_after(1):
+                    alice_session = await dial_in_from_alice
+                assert alice_session.remote_node_id == alice.local_node_id
+
+                with trio.fail_after(1):
+                    await handshake_complete
 
         ping_msg = await subscription.receive()
         assert isinstance(ping_msg, Message)

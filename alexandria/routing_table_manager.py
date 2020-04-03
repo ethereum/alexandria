@@ -5,7 +5,7 @@ import logging
 import math
 import secrets
 import socket
-from typing import AsyncIterable, Generator, Iterable, Sequence, Tuple
+from typing import Generator, Iterable, Sequence, Tuple
 
 from async_service import Service
 from eth_utils import to_tuple
@@ -26,10 +26,10 @@ from alexandria.routing_table import compute_distance, compute_log_distance
 from alexandria.typing import NodeID
 
 
-ROUTING_TABLE_PING_INTERVAL = 5  # interval of outgoing pings sent to maintain the routing table
-ROUTING_TABLE_LOOKUP_INTERVAL = 5  # intervals between lookups
+ROUTING_TABLE_PING_INTERVAL = 30  # interval of outgoing pings sent to maintain the routing table
+ROUTING_TABLE_LOOKUP_INTERVAL = 10  # intervals between lookups
 
-NODES_PER_PAYLOAD = FOUND_NODES_PAYLOAD_SIZE / 38
+NODES_PER_PAYLOAD = FOUND_NODES_PAYLOAD_SIZE // 38
 
 LOOKUP_CONCURRENCY_FACTOR = 3  # maximum number of concurrent FindNodes lookups
 LOOKUP_RETRY_THRESHOLD = 5  # minimum number of ENRs desired in responses to FindNode requests
@@ -57,14 +57,44 @@ class RoutingTableManager(Service):
         self.local_endpoint = local_endpoint
 
     async def run(self) -> None:
+        self.manager.run_task(self._do_initial_routing_table_population)
         self.manager.run_daemon_task(self._pong_when_pinged)
         self.manager.run_daemon_task(self._ping_occasionally)
         self.manager.run_daemon_task(self._lookup_occasionally)
         self.manager.run_daemon_task(self._handle_lookup)
+        await self.manager.wait_finished()
+
+    async def _do_initial_routing_table_population(self) -> None:
+        self.logger.info('Doing initial routing table population...')
+        while self.routing_table.is_empty:
+            self.logger.info('Routing table empty.  Waiting....')
+            await trio.sleep(1)
+
+        async with trio.open_nursery() as nursery:
+            async def do_lookup(peer, distance):
+                found_nodes = await self.lookup_at_peer(peer, distance)
+
+                for node in found_nodes:
+                    is_reachable = await self._verify_node(node)
+                    if is_reachable:
+                        self.logger.info('Found reachable node: %s', node)
+                    else:
+                        self.logger.info('Found unreachable node: %s', node)
+
+            for node_id in self.routing_table.iter_nodes():
+                endpoint = self.endpoint_db.get_endpoint(node_id)
+                peer = Node(node_id, endpoint)
+                for distance in range(1, 256):
+                    nursery.start_soon(do_lookup, peer, distance)
 
     async def _handle_lookup(self) -> None:
         with self.message_dispatcher.subscribe(FindNodes) as subscription:
             async for request in subscription.stream():
+                self.logger.debug(
+                    'Handling `FindNodes(distance=%d, request_id=%d)`',
+                    request.payload.distance,
+                    request.payload.request_id,
+                )
                 if request.payload.distance == 0:
                     local_node_id = self.routing_table.center_node_id
                     local_endpoint = self.local_endpoint
@@ -74,8 +104,14 @@ class RoutingTableManager(Service):
                 else:
                     nodes = self._get_nodes_at_distance(request.payload.distance)
 
+                self.logger.debug(
+                    'Found %d nodes for `FindNodes(distance=%d, request_id=%d)`',
+                    len(nodes),
+                    request.payload.distance,
+                    request.payload.request_id,
+                )
                 batches = tuple(partition_all(NODES_PER_PAYLOAD, nodes))
-                async for batch in batches:
+                for batch in batches:
                     response = Message(
                         FoundNodes(request.payload.request_id, len(batches), batch),
                         request.node_id,
@@ -98,9 +134,25 @@ class RoutingTableManager(Service):
 
             yield (
                 node_id,
-                socket.inet_aton(endpoint.ip_address),
+                socket.inet_aton(str(endpoint.ip_address)),
                 endpoint.port,
             )
+
+    async def _verify_node(self, node: Node) -> bool:
+        with trio.move_on_after(2) as scope:
+            await self.message_dispatcher.request(Message(
+                Ping(self.message_dispatcher.get_free_request_id(node.node_id)),
+                node.node_id,
+                node.endpoint,
+            ), Pong)
+            self.routing_table.update(node.node_id)
+            self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
+            self.logger.debug(
+                'Established connection with found node: %s@%s',
+                humanize_node_id(node.node_id),
+                node.endpoint,
+            )
+        return scope.cancelled_caught
 
     async def _lookup_occasionally(self) -> None:
         async with trio.open_nursery() as nursery:
@@ -108,22 +160,6 @@ class RoutingTableManager(Service):
                 if self.routing_table.is_empty:
                     self.logger.debug('Aborting scheduled lookup due to empty routing table')
                     continue
-
-                async def _ensure_node_reachable(node):
-                    # first establish that we can communicate with them...
-                    with trio.move_on_after(2):
-                        await self.message_dispatcher.request(Message(
-                            Ping(self.message_dispatcher.get_free_request_id(node.node_id)),
-                            node.node_id,
-                            node.endpoint,
-                        ), Pong)
-                        self.routing_table.update(node.node_id)
-                        self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
-                        self.logger.debug(
-                            'Established connection with found node: %s@%s',
-                            humanize_node_id(node.node_id),
-                            node.endpoint,
-                        )
 
                 target_node_id = NodeID(secrets.randbits(256))
                 found_nodes = await self.lookup(target_node_id)
@@ -133,24 +169,33 @@ class RoutingTableManager(Service):
                     len(found_nodes),
                 )
                 for node in found_nodes:
-                    nursery.start_soon(_ensure_node_reachable, node)
+                    nursery.start_soon(self._verify_node, node)
 
     async def lookup(self, target_id: NodeID) -> Tuple[Node, ...]:
-        self.logger.info("Looking up %s", humanize_node_id(target_id))
+        self.logger.info("Starting looking up @ %s", humanize_node_id(target_id))
 
         queried_node_ids = set()
         unresponsive_node_ids = set()
         received_nodes: DefaultDict[NodeID, Set[Endpoint]] = collections.defaultdict(set)
 
         async def lookup_and_store_response(peer: Node) -> None:
-            found_nodes = 0
+            total_found_nodes = 0
+
+            self.logger.debug(
+                "Looking up %s via node %s",
+                humanize_node_id(target_id),
+                humanize_node_id(peer.node_id),
+            )
+            distance = compute_log_distance(peer.node_id, target_id)
 
             with trio.move_on_after(5):
-                async for node in self.lookup_at_peer(peer, target_id):
-                    found_nodes += 1
-                    received_nodes[node.node_id].append(node.endpoint)
+                found_nodes = await self.lookup_at_peer(peer, distance)
 
-            if found_nodes == 0:
+                for node in found_nodes:
+                    total_found_nodes += 1
+                    received_nodes[node.node_id].add(node.endpoint)
+
+            if total_found_nodes == 0:
                 unresponsive_node_ids.add(peer.node_id)
 
         @to_tuple
@@ -186,10 +231,11 @@ class RoutingTableManager(Service):
                     lookup_round_counter + 1,
                     humanize_node_id(target_id),
                 )
-                async with trio.open_nursery() as nursery:
-                    for peer_id in nodes_to_query:
-                        for endpoint in get_endpoints(peer_id):
-                            nursery.start_soon(lookup_and_store_response, Node(peer_id, endpoint))
+                for peer_id in nodes_to_query:
+                    for endpoint in get_endpoints(peer_id):
+                        await lookup_and_store_response(Node(peer_id, endpoint))
+                        # TODO: we should run these concurrently but something is broken
+                        # nursery.start_soon(lookup_and_store_response, Node(peer_id, endpoint))
             else:
                 self.logger.debug(
                     "Lookup for %s finished in %d rounds",
@@ -198,60 +244,62 @@ class RoutingTableManager(Service):
                 )
                 break
 
-        return tuple(
+        found_nodes = tuple(
             Node(node_id, endpoint)
             for node_id, endpoints in received_nodes.items()
             for endpoint in endpoints
         )
-
-    async def lookup_at_peer(self, peer: Node, target_id: NodeID) -> AsyncIterable[Node]:
-        self.logger.debug(
-            "Looking up %s via node %s",
+        self.logger.info(
+            "Finished looking up @ %s: Found %d nodes",
             humanize_node_id(target_id),
-            humanize_node_id(peer.node_id),
+            len(found_nodes),
         )
-        distance = compute_log_distance(peer.node_id, target_id)
+        return found_nodes
 
+    async def lookup_at_peer(self, peer: Node, distance: int) -> Tuple[Node, ...]:
         request = Message(
             FindNodes(self.message_dispatcher.get_free_request_id(peer.node_id), distance),
             peer.node_id,
             peer.endpoint,
         )
         response_count = 0
-        with self.message_dispatcher.request_response(request, FindNodes) as subscription:
+        found_nodes = []
+        with self.message_dispatcher.request_response(request, FoundNodes) as subscription:
             async for response in subscription.stream():
                 response_count += 1
                 for node_id, ip_address, port in response.payload.nodes:
                     endpoint = Endpoint(ipaddress.IPv4Address(ip_address), port)
                     node = Node(node_id, endpoint)
-                    yield node
+                    found_nodes.append(node)
 
-                if response.total == response_count:
+                if response.payload.total == response_count:
                     break
+        return tuple(found_nodes)
 
     async def _ping_occasionally(self) -> None:
         async for _ in every(ROUTING_TABLE_PING_INTERVAL):  # noqa: F841
-            if not self.routing_table.is_empty:
-                log_distance = self.routing_table.get_least_recently_updated_log_distance()
-                candidates = self.routing_table.get_nodes_at_log_distance(log_distance)
-                for node_id in reversed(candidates):
-                    endpoint = self.endpoint_db.get_endpoint(node_id)
-
-                    message = Message(
-                        Ping(self.message_dispatcher.get_free_request_id(node_id)),
-                        node_id,
-                        endpoint,
-                    )
-                    self.logger.debug("Pinging %s", humanize_node_id(node_id))
-                    with trio.move_on_after(10) as scope:
-                        await self.message_dispatcher.request(message, Pong)
-
-                    if scope.cancelled_caught:
-                        self.routing_table.remove(node_id)
-                    else:
-                        break
-            else:
+            if self.routing_table.is_empty:
                 self.logger.warning("Routing table is empty, no one to ping")
+                continue
+
+            log_distance = self.routing_table.get_least_recently_updated_log_distance()
+            candidates = self.routing_table.get_nodes_at_log_distance(log_distance)
+            for node_id in reversed(candidates):
+                endpoint = self.endpoint_db.get_endpoint(node_id)
+
+                message = Message(
+                    Ping(self.message_dispatcher.get_free_request_id(node_id)),
+                    node_id,
+                    endpoint,
+                )
+                self.logger.debug("Pinging %s", humanize_node_id(node_id))
+                with trio.move_on_after(10) as scope:
+                    await self.message_dispatcher.request(message, Pong)
+
+                if scope.cancelled_caught:
+                    self.routing_table.remove(node_id)
+                else:
+                    break
 
     async def _pong_when_pinged(self) -> None:
         with self.message_dispatcher.subscribe(Ping) as subscription:

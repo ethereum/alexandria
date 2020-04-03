@@ -54,13 +54,16 @@ class Application(Service):
 
         self.manager.run_task(self._bootstrap)
         self.manager.run_daemon_child_service(self._routing_table_manager)
+        self.manager.run_daemon_task(self._monitor_endpoints)
 
         await self.manager.wait_finished()
 
     async def _monitor_endpoints(self) -> None:
         async with self.client.events.handshake_complete.subscribe() as subscription:
             async for session in subscription:
+                self.logger.info('GOT NEW ENDPOINT: %s', session.remote_endpoint)
                 self.endpoint_db.set_endpoint(session.remote_node_id, session.remote_endpoint)
+                self.routing_table.update(session.remote_node_id)
 
     async def _bond(self, node: Node) -> None:
         if self.client.pool.has_session(node.node_id):
@@ -77,7 +80,7 @@ class Application(Service):
             await self.client.message_dispatcher.request(message, Pong)
             self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
             self.routing_table.update(node.node_id)
-            self.logger.info('Bonded successfully with: %s', node)
+            self.logger.info('Bonded successfully with: %s | EMPTY %s', node, self.routing_table.is_empty)  # noqa: E501
 
         if scope.cancelled_caught:
             self.logger.debug('Timed out bonding with: %s', node)

@@ -65,20 +65,23 @@ class MessageDispatcher(Service):
     async def _handle_inbound_messages(self,
                                        receive_channel: trio.abc.ReceiveChannel[MessageAPI[sedes.Serializable]],  # noqa: E501
                                        ) -> None:
-        async with trio.open_nursery() as nursery:
-            async with receive_channel:
-                async for message in receive_channel:
-                    #
-                    # Subscriptions
-                    #
-                    channels = self._subscriptions[message.message_id]
-                    self.logger.debug(
-                        'Handling %d subscriptions for message: %s',
-                        len(channels),
-                        message,
-                    )
-                    for send_channel in channels:
-                        nursery.start_soon(send_channel.send, message)
+        try:
+            async with trio.open_nursery() as nursery:
+                async with receive_channel:
+                    async for message in receive_channel:
+                        #
+                        # Subscriptions
+                        #
+                        channels = self._subscriptions[message.message_id]
+                        self.logger.debug(
+                            'Handling %d subscriptions for message: %s',
+                            len(channels),
+                            message,
+                        )
+                        for send_channel in channels:
+                            nursery.start_soon(send_channel.send, message)
+        except trio.BrokenResourceError:
+            pass
 
     async def request(self,
                       message: MessageAPI[sedes.Serializable],
@@ -110,7 +113,10 @@ class MessageDispatcher(Service):
                     elif message.payload.request_id != request_id:
                         continue
                     else:
-                        await send_channel.send(message)
+                        try:
+                            await send_channel.send(message)
+                        except trio.BrokenResourceError:
+                            break
 
     def request_response(self,
                          message: MessageAPI[sedes.Serializable],

@@ -2,7 +2,7 @@ import collections
 import functools
 import itertools
 import logging
-from typing import Deque, Generator, Tuple
+from typing import Deque, Iterable, Tuple
 
 from alexandria._utils import humanize_node_id
 from alexandria.abc import RoutingTableAPI
@@ -189,10 +189,13 @@ class RoutingTable(RoutingTableAPI):
         else:
             return bucket_index + 1
 
-    def iter_nodes_around(self, reference_node_id: NodeID) -> Generator[NodeID, None, None]:
+    def iter_nodes_around(self, reference_node_id: NodeID) -> Iterable[NodeID]:
         """Iterate over all nodes in the routing table ordered by distance to a given reference."""
         all_node_ids = itertools.chain(*self.buckets)
         distance_to_reference = functools.partial(compute_distance, reference_node_id)
         sorted_node_ids = sorted(all_node_ids, key=distance_to_reference)
         for node_id in sorted_node_ids:
             yield node_id
+
+    def iter_nodes(self) -> Iterable[NodeID]:
+        yield from itertools.chain(*self.buckets)

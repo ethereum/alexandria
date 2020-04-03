@@ -1,4 +1,5 @@
 import logging
+import random
 
 from async_service import background_trio_service
 from async_exit_stack import AsyncExitStack
@@ -18,11 +19,8 @@ async def bootnode():
     bootnode = ApplicationFactory()
     logger.info('BOOTNODE: %s', humanize_node_id(bootnode.client.local_node_id))
     async with bootnode.client.events.listening.subscribe() as listening:
-        logger.error('HERE.0')
         async with background_trio_service(bootnode):
-            logger.error('HERE.1')
             await listening
-            logger.error('HERE.2')
             yield bootnode
 
 
@@ -36,11 +34,13 @@ async def test_application(bootnode):
     async def monitor_bootnode():
         async with new_connections:
             async for session in new_connections:
+                logger.info('NODE_CONNECTED_TO_BOOTNODE: %s', humanize_node_id(session.remote_node_id))  # noqa: E501
                 connected_nodes.append(session.remote_node_id)
 
     async with AsyncExitStack() as stack:
         for i in range(2):
+            await trio.sleep(random.randint(0, 2))
             app = ApplicationFactory(bootnodes=bootnodes)
             logger.info('CLIENT-%d: %s', i, humanize_node_id(app.client.local_node_id))
             await stack.enter_async_context(background_trio_service(app))
-        await trio.sleep(60)
+        await trio.sleep_forever()

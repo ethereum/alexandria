@@ -185,6 +185,10 @@ class Node(NamedTuple):
     node_id: NodeID
     endpoint: Endpoint
 
+    def __str__(self) -> None:
+        from alexandria._utils import humanize_node_id
+        return f"{humanize_node_id(self.node_id)}@{self.endpoint}"
+
 
 TAwaitable = TypeVar('TAwaitable', bound=Awaitable[Any])
 
