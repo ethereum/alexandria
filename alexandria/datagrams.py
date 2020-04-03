@@ -1,10 +1,10 @@
+import ipaddress
 import logging
 from typing import (
     AsyncIterable,
 )
 
 from async_generator import asynccontextmanager
-from eth_utils import humanize_hash
 import trio
 
 from alexandria.abc import (
@@ -22,11 +22,11 @@ async def _handle_inbound(socket: trio.socket.SocketType,
     async with send_channel:
         while True:
             data, (ip_address, port) = await socket.recvfrom(DATAGRAM_BUFFER_SIZE)
-            endpoint = Endpoint(ip_address, port)
-            inbound_datagram = Datagram(data, endpoint)
-            logger.debug('handling inbound datagram: %s -> %s', humanize_hash(data), endpoint)
+            endpoint = Endpoint(ipaddress.IPv4Address(ip_address), port)
+            datagram = Datagram(data, endpoint)
+            logger.debug('inbound datagram: %s', datagram)
             try:
-                await send_channel.send(inbound_datagram)
+                await send_channel.send(datagram)
             except trio.BrokenResourceError:
                 break
 
@@ -35,8 +35,9 @@ async def _handle_outbound(socket: trio.socket.SocketType,
                            receive_channel: trio.abc.SendChannel[Datagram],
                            ) -> None:
     async with receive_channel:
-        async for data, endpoint in receive_channel:
-            logger.debug('handling outbound datagram: %s -> %s', humanize_hash(data), endpoint)
+        async for datagram in receive_channel:
+            logger.debug('outbound datagram: %s', datagram)
+            data, endpoint = datagram
             await socket.sendto(data, (str(endpoint.ip_address), endpoint.port))
 
 
@@ -53,7 +54,7 @@ async def listen(endpoint: Endpoint,
     await socket.bind((str(ip_address), port))
 
     async with trio.open_nursery() as nursery:
-        logger.debug('Datagram listener started on %s:%s', ip_address, port)
+        logger.debug('Network connection listening on %s', endpoint)
         nursery.start_soon(_handle_inbound, socket, inbound_datagram_send_channel)
         nursery.start_soon(_handle_outbound, socket, outbound_datagram_receive_channel)
         yield

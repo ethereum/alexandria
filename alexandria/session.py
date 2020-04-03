@@ -10,7 +10,7 @@ from ssz import sedes
 import trio
 
 from alexandria._utils import humanize_node_id
-from alexandria.abc import Endpoint, EventsAPI, MessageAPI, PacketAPI, SessionAPI
+from alexandria.abc import EventsAPI, MessageAPI, Node, PacketAPI, SessionAPI
 from alexandria.exceptions import HandshakeFailure, DecryptionError
 from alexandria.handshake import (
     compute_session_keys,
@@ -35,7 +35,7 @@ from alexandria.typing import NodeID, Tag, AES128Key, IDNonce
 
 class SessionStatus(enum.Enum):
     BEFORE = '|'
-    DURING = '='
+    DURING = '~'
     AFTER = '-'
 
 
@@ -44,15 +44,15 @@ class BaseSession(SessionAPI):
 
     def __init__(self,
                  private_key: keys.PrivateKey,
-                 remote_node_id: NodeID,
-                 remote_endpoint: Endpoint,
+                 remote_node: Node,
                  events: EventsAPI,
                  outbound_packet_send_channel: trio.abc.SendChannel[PacketAPI],
                  inbound_message_send_channel: trio.abc.SendChannel[MessageAPI[sedes.Serializable]],
                  ) -> None:
         self._private_key = private_key
-        self._remote_node_id = remote_node_id
-        self._remote_endpoint = remote_endpoint
+        self.remote_node = remote_node
+        self.remote_node_id = remote_node.node_id
+        self.remote_endpoint = remote_node.endpoint
         self._status = SessionStatus.BEFORE
 
         self._events = events
@@ -101,14 +101,6 @@ class BaseSession(SessionAPI):
             hashlib.sha256(self.private_key.public_key.to_bytes()).digest(),
             'big',
         )
-
-    @property
-    def remote_node_id(self) -> NodeID:
-        return self._remote_node_id
-
-    @property
-    def remote_endpoint(self) -> Endpoint:
-        return self._remote_endpoint
 
     @property
     def tag(self) -> Tag:
@@ -184,8 +176,7 @@ class SessionInitiator(BaseSession):
                 payload = packet.decrypt_payload(self._session_keys.decryption_key)
                 message = Message(
                     payload=payload,
-                    node_id=self.remote_node_id,
-                    endpoint=self.remote_endpoint,
+                    node=self.remote_node,
                 )
                 self.logger.debug(
                     '%s: processed inbound message packet: %s',
@@ -343,8 +334,7 @@ class SessionRecipient(BaseSession):
                 payload = packet.decrypt_payload(self._session_keys.decryption_key)
                 message = Message(
                     payload=payload,
-                    node_id=self.remote_node_id,
-                    endpoint=self.remote_endpoint,
+                    node=self.remote_node,
                 )
                 self.logger.debug(
                     '%s: processed inbound message packet: %s',
@@ -434,8 +424,7 @@ class SessionRecipient(BaseSession):
         )
         message = Message(
             payload=payload,
-            node_id=remote_node_id,
-            endpoint=self.remote_endpoint,
+            node=self.remote_node,
         )
         await self._inbound_message_send_channel.send(message)
         return session_keys

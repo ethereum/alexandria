@@ -1,100 +1,41 @@
-import logging
-
 import pytest
 
 import trio
-from eth_utils import humanize_hash
-
-from async_service import background_trio_service
-
-from alexandria.messages import Ping, Message, Pong
-from alexandria.tools.factories import ClientFactory, EndpointFactory
-
-logger = logging.getLogger('alexandria.testing')
-
-
-@pytest.fixture
-async def alice_and_bob():
-    alice = ClientFactory()
-    bob = ClientFactory()
-
-    logger.info('ALICE: %s', humanize_hash(alice.local_node_id.to_bytes(32, 'big')))
-    logger.info('BOB: %s', humanize_hash(bob.local_node_id.to_bytes(32, 'big')))
-
-    alice_listening = alice.events.listening.subscribe()
-    bob_listening = bob.events.listening.subscribe()
-    async with alice_listening, bob_listening:
-        async with background_trio_service(bob), background_trio_service(alice):
-            await alice_listening
-            await bob_listening
-
-            yield alice, bob
 
 
 @pytest.mark.trio
-async def test_client_connect(alice_and_bob):
-    alice, bob = alice_and_bob
+async def test_client_inbound_connect(alice_and_bob_clients):
+    alice, bob = alice_and_bob_clients
 
-    alice_endpoint = EndpointFactory(ip_address='127.0.0.1', port=alice.listen_on.port)
-    bob_endpoint = EndpointFactory(ip_address='127.0.0.1', port=bob.listen_on.port)
+    got_dial_in = bob.events.new_session.subscribe()
+    got_completed_handshake = bob.events.handshake_complete.subscribe()
 
-    with bob.message_dispatcher.subscribe(Ping) as subscription:
-        async with bob.events.new_session.subscribe() as dial_in_from_alice:
-            async with bob.events.handshake_complete.subscribe() as handshake_complete:
-                message = Message(Ping(1234), bob.local_node_id, bob_endpoint)
-                await alice.message_dispatcher.send_message(message)
+    async with got_dial_in, got_completed_handshake:
+        await alice.send_ping(bob.local_node)
 
-                with trio.fail_after(1):
-                    alice_session = await dial_in_from_alice
-                assert alice_session.remote_node_id == alice.local_node_id
+        with trio.fail_after(1):
+            alice_session_from_dial_in = await got_dial_in
+        assert alice_session_from_dial_in.remote_node_id == alice.local_node_id
 
-                with trio.fail_after(1):
-                    await handshake_complete
-
-        ping_msg = await subscription.receive()
-        assert isinstance(ping_msg, Message)
-        payload = ping_msg.payload
-        assert isinstance(payload, Ping)
-        assert payload.request_id == 1234
-
-    with alice.message_dispatcher.subscribe(Pong) as subscription:
-        message = Message(Pong(1234), alice.local_node_id, alice_endpoint)
-        await bob.message_dispatcher.send_message(message)
-
-        pong_msg = await subscription.receive()
-        assert isinstance(pong_msg, Message)
-        payload = pong_msg.payload
-        assert isinstance(payload, Pong)
-        assert payload.request_id == 1234
+        with trio.fail_after(1):
+            alice_session_from_complete_handhshake = await got_completed_handshake
+        assert alice_session_from_complete_handhshake.remote_node_id == alice.local_node_id
 
 
 @pytest.mark.trio
-async def test_client_request_response(alice_and_bob):
-    alice, bob = alice_and_bob
+async def test_client_outbound_connect(alice_and_bob_clients):
+    alice, bob = alice_and_bob_clients
 
-    async with trio.open_nursery() as nursery:
-        alice_endpoint = EndpointFactory(ip_address='127.0.0.1', port=alice.listen_on.port)
-        bob_endpoint = EndpointFactory(ip_address='127.0.0.1', port=bob.listen_on.port)
+    got_dial_in = alice.events.new_session.subscribe()
+    got_completed_handshake = alice.events.handshake_complete.subscribe()
 
-        ready = trio.Event()
+    async with got_dial_in, got_completed_handshake:
+        await alice.send_ping(bob.local_node)
 
-        async def pong_when_pinged():
-            with bob.message_dispatcher.subscribe(Ping) as subscription:
-                ready.set()
-                request = await subscription.receive()
-                pong = Pong(request.payload.request_id)
-                message = Message(pong, alice.local_node_id, alice_endpoint)
-                await bob.message_dispatcher.send_message(message)
+        with trio.fail_after(1):
+            bob_session_from_dial_in = await got_dial_in
+        assert bob_session_from_dial_in.remote_node_id == bob.local_node_id
 
-        nursery.start_soon(pong_when_pinged)
-        await ready.wait()
-        ping_message = Message(Ping(1234), bob.local_node_id, bob_endpoint)
-        pong_message = await alice.message_dispatcher.request_response(
-            ping_message,
-            Pong,
-        )
-
-        assert pong_message.node_id == bob.local_node_id
-        payload = pong_message.payload
-        assert isinstance(payload, Pong)
-        assert payload.request_id == 1234
+        with trio.fail_after(1):
+            bob_session_from_complete_handhshake = await got_completed_handshake
+        assert bob_session_from_complete_handhshake.remote_node_id == bob.local_node_id

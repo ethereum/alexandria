@@ -10,6 +10,7 @@ from alexandria.abc import (
     Endpoint,
     EventsAPI,
     MessageAPI,
+    Node,
     PoolAPI,
     SessionAPI,
 )
@@ -51,17 +52,17 @@ class Pool(PoolAPI):
         return self._sessions[remote_node_id]
 
     def create_session(self,
-                       remote_node_id: NodeID,
-                       remote_endpoint: Endpoint,
+                       remote_node: Node,
                        is_initiator: bool) -> SessionAPI:
-        if remote_node_id in self._sessions:
-            raise DuplicateSession(f"No session found for {humanize_node_id(remote_node_id)}")
+        if remote_node.node_id in self._sessions:
+            raise DuplicateSession(
+                f"Session already present for {humanize_node_id(remote_node.node_id)}"
+            )
 
         if is_initiator:
             session = SessionInitiator(
                 private_key=self._private_key,
-                remote_node_id=remote_node_id,
-                remote_endpoint=remote_endpoint,
+                remote_node=remote_node,
                 events=self._events,
                 outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),
                 inbound_message_send_channel=self._inbound_message_send_channel.clone(),
@@ -69,16 +70,12 @@ class Pool(PoolAPI):
         else:
             session = SessionRecipient(
                 private_key=self._private_key,
-                remote_node_id=remote_node_id,
-                remote_endpoint=remote_endpoint,
+                remote_node=remote_node,
                 events=self._events,
                 outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),
                 inbound_message_send_channel=self._inbound_message_send_channel.clone(),
             )
 
-        # We insert the session here to prevent a race condition where an
-        # alternate path to session creation results in a new session being
-        # inserted before the `_manage_session` task can run.
-        self._sessions[remote_node_id] = session
+        self._sessions[remote_node.node_id] = session
 
         return session

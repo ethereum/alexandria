@@ -11,6 +11,12 @@ MAX_PACKET_SIZE = 1280
 # Max size for the `nodes` payload of a `FoundNodes` message
 FOUND_NODES_PAYLOAD_SIZE = MAX_PACKET_SIZE - 200
 
+# The encoded size of a single encoded payload of [node_id, ip_address, port]
+SINGLE_NODE_PAYLOAD_SIZE = 38
+
+# The number of node payloads that can fit into a datagram
+NODES_PER_PAYLOAD = FOUND_NODES_PAYLOAD_SIZE // 38
+
 # Buffer size used for incoming discovery UDP datagrams (must be larger than
 # MAX_PACKET_SIZE)
 DATAGRAM_BUFFER_SIZE = MAX_PACKET_SIZE * 2

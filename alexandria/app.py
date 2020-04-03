@@ -5,10 +5,10 @@ from async_service import Service
 from eth_keys import keys
 import trio
 
+from alexandria._utils import humanize_node_id
 from alexandria.abc import ClientAPI, Endpoint, EndpointDatabaseAPI, Node, RoutingTableAPI
 from alexandria.client import Client
 from alexandria.endpoint_db import MemoryEndpointDB
-from alexandria.messages import Message, Ping, Pong
 from alexandria.routing_table import RoutingTable
 from alexandria.routing_table_manager import RoutingTableManager
 
@@ -59,25 +59,32 @@ class Application(Service):
         await self.manager.wait_finished()
 
     async def _monitor_endpoints(self) -> None:
+        """
+        Listen for completed handshakes and record the nodes in the routing
+        table as well as the endpoint database.
+        """
         async with self.client.events.handshake_complete.subscribe() as subscription:
             async for session in subscription:
-                self.logger.info('GOT NEW ENDPOINT: %s', session.remote_endpoint)
+                self.logger.debug(
+                    'recording node and endpoint: %s@%s',
+                    humanize_node_id(session.remote_node_id),
+                    session.remote_endpoint,
+                )
                 self.endpoint_db.set_endpoint(session.remote_node_id, session.remote_endpoint)
                 self.routing_table.update(session.remote_node_id)
 
     async def _bond(self, node: Node) -> None:
+        """
+        Establish a session with the given node if one is not already present.
+        """
         if self.client.pool.has_session(node.node_id):
             self.logger.debug('Skipping bond. Session already active with %s', node)
-        else:
-            self.logger.debug('Initiating bond with: %s', node)
+            return
+
+        self.logger.debug('Initiating bond with: %s', node)
 
         with trio.move_on_after(BOND_TIMEOUT) as scope:
-            message = Message(
-                Ping(request_id=self.client.message_dispatcher.get_free_request_id(node.node_id)),
-                node_id=node.node_id,
-                endpoint=node.endpoint,
-            )
-            await self.client.message_dispatcher.request(message, Pong)
+            await self.client.ping(node)
             self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
             self.routing_table.update(node.node_id)
             self.logger.info('Bonded successfully with: %s | EMPTY %s', node, self.routing_table.is_empty)  # noqa: E501
