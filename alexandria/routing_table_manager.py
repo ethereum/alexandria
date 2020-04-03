@@ -1,4 +1,5 @@
 import collections
+import ipaddress
 import itertools
 import logging
 import math
@@ -55,14 +56,40 @@ class RoutingTableManager(Service):
         self.client = client
 
     async def run(self) -> None:
-        self.manager.run_task(self._do_initial_routing_table_population)
+        #self.manager.run_task(self._do_initial_routing_table_population)
+        self.manager.run_daemon_task(self._periodic_report_routing_table_status)
         self.manager.run_daemon_task(self._pong_when_pinged)
         self.manager.run_daemon_task(self._ping_occasionally)
         self.manager.run_daemon_task(self._lookup_occasionally)
         self.manager.run_daemon_task(self._handle_lookup)
         await self.manager.wait_finished()
 
+    async def _periodic_report_routing_table_status(self) -> None:
+        async for _ in every(30, 10):  # noqa: F841
+            stats = self.routing_table.get_stats()
+            if stats.full_buckets:
+                full_buckets = '/'.join((str(index) for index in stats.full_buckets))
+            else:
+                full_buckets = 'None'
+            self.logger.info(
+                (
+                    "\n"
+                    "####################################################\n"
+                    "       RoutingTable(bucket_size=%d, num_buckets=%d):\n"
+                    "         - %d nodes\n"
+                    "         - full buckets: %s\n"
+                    "         - %d nodes in replacement cache\n"
+                    "####################################################"
+                ),
+                stats.bucket_size,
+                stats.num_buckets,
+                stats.total_nodes,
+                full_buckets,
+                stats.num_in_replacement_cache,
+            )
+
     async def _do_initial_routing_table_population(self) -> None:
+        assert False
         self.logger.info('Doing initial routing table population...')
         while self.routing_table.is_empty:
             self.logger.info('Routing table empty.  Waiting....')
@@ -70,14 +97,15 @@ class RoutingTableManager(Service):
 
         async with trio.open_nursery() as nursery:
             async def do_lookup(peer, distance):
-                found_nodes = await self.lookup_from_peer(peer, distance)
+                found_nodes = await self.client.find_nodes(peer, distance=distance)
 
-                for node in found_nodes:
-                    is_reachable = await self._verify_node(node)
-                    if is_reachable:
-                        self.logger.info('Found reachable node: %s', node)
-                    else:
-                        self.logger.info('Found unreachable node: %s', node)
+                for message in found_nodes:
+                    for node in message.payload.nodes:
+                        is_reachable = await self._verify_node(node)
+                        if is_reachable:
+                            self.logger.info('Found reachable node: %s', node)
+                        else:
+                            self.logger.info('Found unreachable node: %s', node)
 
             for node_id in self.routing_table.iter_nodes():
                 endpoint = self.endpoint_db.get_endpoint(node_id)
@@ -87,7 +115,8 @@ class RoutingTableManager(Service):
 
     async def _handle_lookup(self) -> None:
         with self.client.message_dispatcher.subscribe(FindNodes) as subscription:
-            async for request in subscription.stream():
+            while True:
+                request = await subscription.receive()
                 self.logger.debug("handling request: %s", request)
 
                 if request.payload.distance == 0:
@@ -177,8 +206,10 @@ class RoutingTableManager(Service):
                 if len(found_nodes) == 0:
                     unresponsive_node_ids.add(peer.node_id)
                 else:
-                    for node in found_nodes:
-                        received_nodes[node.node_id].add(node.endpoint)
+                    for message in found_nodes:
+                        for node_id, ip_address, port in message.payload.nodes:
+                            endpoint = Endpoint(ipaddress.IPv4Address(ip_address), port)
+                            received_nodes[node_id].add(endpoint)
 
         @to_tuple
         def get_endpoints(node_id: NodeID) -> Iterable[Endpoint]:
@@ -213,6 +244,7 @@ class RoutingTableManager(Service):
                     lookup_round_counter + 1,
                     humanize_node_id(target_id),
                 )
+                queried_node_ids.update(nodes_to_query)
                 async with trio.open_nursery() as nursery:
                     for peer_id in nodes_to_query:
                         for endpoint in get_endpoints(peer_id):
@@ -263,12 +295,13 @@ class RoutingTableManager(Service):
 
     async def _pong_when_pinged(self) -> None:
         with self.client.message_dispatcher.subscribe(Ping) as subscription:
-            async for message in subscription.stream():
+            while True:
+                request = await subscription.receive()
                 self.logger.debug(
                     "Got ping from %s, responding with pong",
-                    humanize_node_id(message.node_id),
+                    request.node,
                 )
-                await self.client.send_pong(message.node, request_id=message.payload.request_id)
+                await self.client.send_pong(request.node, request_id=request.payload.request_id)
 
 
 def iter_closest_nodes(target: NodeID,

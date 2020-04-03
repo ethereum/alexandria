@@ -24,7 +24,6 @@ async def bootnode():
             yield bootnode
 
 
-@pytest.mark.skip(reason='does not work')
 @pytest.mark.trio
 async def test_application(bootnode):
     bootnodes = (Node(bootnode.client.local_node_id, bootnode.client.listen_on),)
@@ -39,7 +38,7 @@ async def test_application(bootnode):
                 connected_nodes.append(session.remote_node_id)
 
     async with AsyncExitStack() as stack:
-        for i in range(2):
+        for i in range(5):
             await trio.sleep(random.randint(0, 2))
             app = ApplicationFactory(bootnodes=bootnodes)
             logger.info('CLIENT-%d: %s', i, humanize_node_id(app.client.local_node_id))

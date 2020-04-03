@@ -41,8 +41,7 @@ class Application(Service):
         self._routing_table_manager = RoutingTableManager(
             routing_table=self.routing_table,
             endpoint_db=self.endpoint_db,
-            message_dispatcher=self.client.message_dispatcher,
-            local_endpoint=self.client.listen_on,
+            client=self.client,
         )
 
     async def run(self) -> None:

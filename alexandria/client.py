@@ -2,7 +2,7 @@ import logging
 from typing import Sequence
 
 
-from async_service import Service
+from async_service import Service, background_trio_service
 from eth_keys import keys
 from eth_utils import ValidationError
 from eth_utils.toolz import partition_all
@@ -18,7 +18,7 @@ from alexandria.abc import (
     SessionAPI,
 )
 from alexandria.constants import NODES_PER_PAYLOAD
-from alexandria.datagrams import listen
+from alexandria.datagrams import DatagramListener
 from alexandria.exceptions import SessionNotFound
 from alexandria.events import Events
 from alexandria.packets import decode_packet, NetworkPacket
@@ -123,12 +123,12 @@ class Client(Service, ClientAPI):
                                request_id: int,
                                found_nodes: Sequence[Node]) -> int:
         batches = tuple(partition_all(NODES_PER_PAYLOAD, found_nodes))
-        self.logger.info("Sending FoundNodes to %s", node)
+        self.logger.info("Sending FoundNodes with %d nodes to %s", len(found_nodes), node)
         if batches:
             total_batches = len(batches)
             for batch in batches:
                 payload = tuple(
-                    (node.node_id, node.endpoint.ip_address.packet, node.endpoint.port)
+                    (node.node_id, node.endpoint.ip_address.packed, node.endpoint.port)
                     for node in batch
                 )
                 response = Message(
@@ -160,7 +160,8 @@ class Client(Service, ClientAPI):
         with self.message_dispatcher.subscribe_request(message, FoundNodes) as subscription:
             responses = []
             total_messages = None
-            async for response in subscription.stream():
+            while True:
+                response = await subscription.receive()
                 if total_messages is None:
                     total_messages = response.payload.total
                 else:
@@ -202,12 +203,13 @@ class Client(Service, ClientAPI):
         # messages and dispatches them to individual subscriptions.
         self.manager.run_daemon_child_service(self.message_dispatcher)
 
-        listener = listen(
+        listener = DatagramListener(
             self.listen_on,
             self._inbound_datagram_send_channel,
             self._outbound_datagram_receive_channel,
         )
-        async with listener:
+        async with background_trio_service(listener):
+            await listener.wait_listening()
             await self.events.listening.trigger(self.listen_on)
 
             self.manager.run_daemon_task(

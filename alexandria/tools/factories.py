@@ -12,8 +12,10 @@ except ImportError as err:
     ) from err
 
 
+from alexandria._utils import public_key_to_node_id
+from alexandria.abc import Endpoint, Node
 from alexandria.app import Application
-from alexandria.client import Client, Endpoint
+from alexandria.client import Client
 from alexandria.constants import KEY_BYTE_SIZE
 
 
@@ -54,6 +56,14 @@ class EndpointFactory(factory.Factory):
 
     ip_address = ipaddress.IPv4Address('127.0.0.1')
     port = factory.LazyFunction(get_open_port)
+
+
+class NodeFactory(factory.Factory):
+    class Meta:
+        model = Node
+
+    node_id = factory.LazyFunction(lambda: public_key_to_node_id(PublicKeyFactory()))
+    endpoint = factory.SubFactory(EndpointFactory)
 
 
 class ClientFactory(factory.Factory):

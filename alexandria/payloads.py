@@ -30,7 +30,7 @@ class Pong(sedes.Serializable):
 class FindNodes(sedes.Serializable):
     fields = (
         ("request_id", sedes.uint16),
-        ("distance", sedes.uint8),
+        ("distance", sedes.uint16),
     )
 
     request_id: int

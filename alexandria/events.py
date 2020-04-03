@@ -80,10 +80,9 @@ class Event(EventAPI[TEventPayload]):
 
     async def trigger(self, payload: TEventPayload) -> None:
         self.logger.debug('Triggering event: %s', self.name)
-        with trio.fail_after(1):
-            async with self._lock:
-                for send_channel in self._channels:
-                    await send_channel.send(payload)
+        async with self._lock:
+            for send_channel in self._channels:
+                await send_channel.send(payload)
         self.logger.debug('Finished triggering event: %s', self.name)
 
     def subscribe(self) -> EventSubscriptionAPI[TEventPayload]:

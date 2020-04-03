@@ -6,6 +6,7 @@ from typing import (
     AsyncIterable,
     Awaitable,
     Callable,
+    Collection,
     ContextManager,
     Generic,
     Iterator,
@@ -289,7 +290,19 @@ class ClientAPI(ServiceAPI):
         ...
 
 
-class RoutingTableAPI(ABC):
+class RoutingTableStats(NamedTuple):
+    total_nodes: int
+    bucket_size: int
+    num_buckets: int
+    full_buckets: Tuple[int, ...]
+    num_in_replacement_cache: int
+
+
+class RoutingTableAPI(Collection[NodeID]):
+    @abstractmethod
+    def get_stats(self) -> RoutingTableStats:
+        ...
+
     @abstractmethod
     def update(self, node_id: NodeID) -> NodeID:
         ...

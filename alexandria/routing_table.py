@@ -5,7 +5,7 @@ import logging
 from typing import Deque, Iterable, Tuple
 
 from alexandria._utils import humanize_node_id
-from alexandria.abc import RoutingTableAPI
+from alexandria.abc import RoutingTableAPI, RoutingTableStats
 from alexandria.constants import KEY_BIT_SIZE
 from alexandria.typing import NodeID
 
@@ -37,6 +37,34 @@ class RoutingTable(RoutingTableAPI):
         )
 
         self.bucket_update_order: Deque[int] = collections.deque()
+
+    def __len__(self) -> int:
+        return sum(len(bucket) for bucket in self.buckets)
+
+    def __iter__(self) -> Iterable[NodeID]:
+        for bucket in self.buckets:
+            yield from bucket
+
+    def __contains__(self, node_id: NodeID) -> bool:
+        index = compute_log_distance(self.center_node_id, node_id) - 1
+        bucket = self.buckets[index]
+        return node_id in bucket
+
+    def get_stats(self):
+        full_buckets = tuple(
+            index for index, bucket in enumerate(self.buckets)
+            if len(bucket) >= self.bucket_size
+        )
+        num_in_replacement_cache = sum(
+            len(cache) for cache in self.replacement_caches
+        )
+        return RoutingTableStats(
+            total_nodes=len(self),
+            bucket_size=self.bucket_size,
+            num_buckets=len(self.buckets),
+            full_buckets=full_buckets,
+            num_in_replacement_cache=num_in_replacement_cache,
+        )
 
     def get_index_bucket_and_replacement_cache(self,
                                                node_id: NodeID,
