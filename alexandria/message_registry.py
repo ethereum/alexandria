@@ -7,14 +7,14 @@ from alexandria.abc import RegistryAPI, TPayload
 
 
 class Registry(RegistryAPI):
-    _payload_sedes: Mapping[int, Type[ssz.Serializable]]
-    _message_id_lookup: Mapping[Type[ssz.Serializable], int]
+    _payload_sedes: Mapping[int, Type[sedes.Serializable]]
+    _message_id_lookup: Mapping[Type[sedes.Serializable], int]
 
     def __init__(self) -> None:
         self._payload_sedes = {}
         self._message_id_lookup = {}
 
-    def register(self, message_id: int, payload_type: Type[ssz.Serializable]) -> None:
+    def register(self, message_id: int, payload_type: Type[sedes.Serializable]) -> None:
         if message_id in self._payload_sedes:
             raise ValueError(
                 f"Cannot register {payload_type} with "
@@ -28,9 +28,9 @@ class Registry(RegistryAPI):
                 f"registered under "
                 f"`message_id={self._message_id_lookup[payload_type]}`"
             )
+
         self._payload_sedes[message_id] = payload_type
         self._message_id_lookup[payload_type] = message_id
-        return payload_type
 
     def get_sedes(self, message_id: int) -> sedes.Serializable:
         return self._payload_sedes[message_id]

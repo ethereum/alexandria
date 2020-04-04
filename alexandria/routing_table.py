@@ -2,7 +2,7 @@ import collections
 import functools
 import itertools
 import logging
-from typing import Deque, Iterable, Tuple
+from typing import Any, Deque, Iterable, Iterator, Optional, Tuple
 
 from alexandria._utils import humanize_node_id
 from alexandria.abc import RoutingTableAPI, RoutingTableStats
@@ -24,7 +24,10 @@ def compute_log_distance(left_node_id: NodeID, right_node_id: NodeID) -> int:
 class RoutingTable(RoutingTableAPI):
     logger = logging.getLogger("p2p.discv5.routing_table.KademliaRoutingTable")
 
-    def __init__(self, center_node_id: NodeID, bucket_size: int, num_bits=KEY_BIT_SIZE) -> None:
+    def __init__(self,
+                 center_node_id: NodeID,
+                 bucket_size: int,
+                 num_bits: int=KEY_BIT_SIZE) -> None:
         self.center_node_id = center_node_id
         self.bucket_size = bucket_size
         self._num_bits = num_bits
@@ -41,16 +44,16 @@ class RoutingTable(RoutingTableAPI):
     def __len__(self) -> int:
         return sum(len(bucket) for bucket in self.buckets)
 
-    def __iter__(self) -> Iterable[NodeID]:
+    def __iter__(self) -> Iterator[NodeID]:
         for bucket in self.buckets:
             yield from bucket
 
-    def __contains__(self, node_id: NodeID) -> bool:
+    def __contains__(self, node_id: Any) -> bool:
         index = compute_log_distance(self.center_node_id, node_id) - 1
         bucket = self.buckets[index]
         return node_id in bucket
 
-    def get_stats(self):
+    def get_stats(self) -> RoutingTableStats:
         full_buckets = tuple(
             index for index, bucket in enumerate(self.buckets)
             if len(bucket) >= self.bucket_size
@@ -74,7 +77,7 @@ class RoutingTable(RoutingTableAPI):
         replacement_cache = self.replacement_caches[index]
         return index, bucket, replacement_cache
 
-    def update(self, node_id: NodeID) -> NodeID:
+    def update(self, node_id: NodeID) -> Optional[NodeID]:
         """Insert a node into the routing table or move it to the top if already present.
 
         If the bucket is already full, the node id will be added to the replacement cache and
@@ -217,7 +220,7 @@ class RoutingTable(RoutingTableAPI):
         else:
             return bucket_index + 1
 
-    def iter_nodes_around(self, reference_node_id: NodeID) -> Iterable[NodeID]:
+    def iter_nodes_around(self, reference_node_id: NodeID) -> Iterator[NodeID]:
         """Iterate over all nodes in the routing table ordered by distance to a given reference."""
         all_node_ids = itertools.chain(*self.buckets)
         distance_to_reference = functools.partial(compute_distance, reference_node_id)

@@ -1,11 +1,9 @@
 from abc import ABC, abstractmethod
 import ipaddress
 from typing import (
-    Any,
     AsyncContextManager,
     AsyncIterable,
     Awaitable,
-    Callable,
     Collection,
     ContextManager,
     Generic,
@@ -23,7 +21,7 @@ from ssz import sedes
 from async_service import ServiceAPI
 from eth_keys import keys
 
-from alexandria.payloads import FoundNodes, Pong
+from alexandria.payloads import Ack, Chunk, FoundNodes, Locations, Pong
 from alexandria.typing import NodeID, Tag
 
 
@@ -48,7 +46,7 @@ class Endpoint(NamedTuple):
     ip_address: ipaddress.IPv4Address
     port: int
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.ip_address}:{self.port}"
 
 
@@ -56,7 +54,7 @@ class Node(NamedTuple):
     node_id: NodeID
     endpoint: Endpoint
 
-    def __str__(self) -> None:
+    def __str__(self) -> str:
         from alexandria._utils import humanize_node_id
         return f"{humanize_node_id(self.node_id)}@{self.endpoint}"
 
@@ -79,9 +77,9 @@ class Datagram(NamedTuple):
     data: bytes
     endpoint: Endpoint
 
-    def __str__(self):
+    def __str__(self) -> str:
         from eth_utils import humanize_hash
-        return f"{humanize_hash(self.data)}@{self.endpoint}"
+        return f"{humanize_hash(self.data)}@{self.endpoint}"  # type: ignore
 
 
 TPayload = TypeVar('TPayload', bound=sedes.Serializable)
@@ -89,15 +87,14 @@ TPayload = TypeVar('TPayload', bound=sedes.Serializable)
 
 class RegistryAPI(ABC):
     @abstractmethod
-    def register(self, message_id: int) -> Callable[[Type[TPayload]], Type[TPayload]]:
+    def register(self, message_id: int, payload_type: Type[sedes.Serializable]) -> None:
         ...
 
 
 class MessageAPI(Generic[TPayload]):
     message_id: int
     payload: TPayload
-    node_id: NodeID
-    endpoint: Endpoint
+    node: Node
 
     @abstractmethod
     def to_bytes(self) -> bytes:
@@ -117,7 +114,7 @@ class SessionAPI(ABC):
         ...
 
     @abstractmethod
-    async def handle_outbound_message(self, message: MessageAPI) -> None:
+    async def handle_outbound_message(self, message: MessageAPI[sedes.Serializable]) -> None:
         ...
 
     @abstractmethod
@@ -189,7 +186,7 @@ class SubscriptionAPI(ContextManager['SubscriptionAPI["TItem"]'], Awaitable[TIte
         ...
 
 
-TAwaitable = TypeVar('TAwaitable', bound=Awaitable[Any])
+TAwaitable = TypeVar('TAwaitable')
 
 
 class EventSubscriptionAPI(Awaitable[TAwaitable], AsyncContextManager[Awaitable[TAwaitable]]):
@@ -210,9 +207,9 @@ class EventAPI(Generic[TEventPayload]):
 
 
 class EventsAPI(ABC):
-    new_session: EventAPI
-    listening: EventAPI
-    handshake_complete: EventAPI
+    new_session: EventAPI[SessionAPI]
+    listening: EventAPI[Endpoint]
+    handshake_complete: EventAPI[SessionAPI]
 
 
 class MessageDispatcherAPI(ServiceAPI):
@@ -227,7 +224,7 @@ class MessageDispatcherAPI(ServiceAPI):
     # Message Sending
     #
     @abstractmethod
-    async def send_message(self, message: MessageAPI) -> None:
+    async def send_message(self, message: MessageAPI[sedes.Serializable]) -> None:
         ...
 
     #
@@ -239,7 +236,7 @@ class MessageDispatcherAPI(ServiceAPI):
 
     @abstractmethod
     def subscribe_request(self,
-                          message: MessageAPI,
+                          message: MessageAPI[sedes.Serializable],
                           response_payload_type: Type[TPayload],
                           ) -> SubscriptionAPI[MessageAPI[TPayload]]:
         ...
@@ -278,15 +275,62 @@ class ClientAPI(ServiceAPI):
                                found_nodes: Sequence[Node]) -> int:
         ...
 
+    @abstractmethod
+    async def send_advertise(self, node: Node, *, key: bytes) -> int:
+        ...
+
+    @abstractmethod
+    async def send_ack(self, node: Node, *, request_id: int) -> None:
+        ...
+
+    @abstractmethod
+    async def send_locate(self, node: Node, *, key: bytes) -> int:
+        ...
+
+    @abstractmethod
+    async def send_locations(self,
+                             node: Node,
+                             *,
+                             request_id: int,
+                             locations: Collection[Node]) -> int:
+        ...
+
+    @abstractmethod
+    async def send_retrieve(self,
+                            node: Node,
+                            *,
+                            key: bytes) -> int:
+        ...
+
+    @abstractmethod
+    async def send_chunks(self,
+                          node: Node,
+                          *,
+                          request_id: int,
+                          data: bytes) -> int:
+        ...
+
     #
     # Request/Response
     #
     @abstractmethod
-    async def ping(self, node: Node) -> Pong:
+    async def ping(self, node: Node) -> MessageAPI[Pong]:
         ...
 
     @abstractmethod
-    async def find_nodes(self, node: Node, distance: int) -> FoundNodes:
+    async def find_nodes(self, node: Node, distance: int) -> Tuple[MessageAPI[FoundNodes], ...]:
+        ...
+
+    @abstractmethod
+    async def advertise(self, node: Node, *, key: bytes, who: Node) -> MessageAPI[Ack]:
+        ...
+
+    @abstractmethod
+    async def locate(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Locations], ...]:
+        ...
+
+    @abstractmethod
+    async def retrieve(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Chunk], ...]:
         ...
 
 
@@ -304,7 +348,7 @@ class RoutingTableAPI(Collection[NodeID]):
         ...
 
     @abstractmethod
-    def update(self, node_id: NodeID) -> NodeID:
+    def update(self, node_id: NodeID) -> Optional[NodeID]:
         ...
 
     @abstractmethod

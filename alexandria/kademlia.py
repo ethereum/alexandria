@@ -1,13 +1,13 @@
 import collections
 import logging
 import secrets
-from typing import Iterable, Mapping, NamedTuple, Tuple
+from typing import DefaultDict, Iterable, Mapping, NamedTuple, Set, Tuple
 
 from async_service import Service
 from eth_utils import to_tuple
 import trio
 
-from alexandria._utils import every, humanize_node_id, sha256
+from alexandria._utils import every, humanize_node_id, content_key_to_node_id
 from alexandria.abc import (
     ClientAPI,
     EndpointDatabaseAPI,
@@ -21,7 +21,7 @@ from alexandria.typing import NodeID
 
 
 ROUTING_TABLE_PING_INTERVAL = 30  # interval of outgoing pings sent to maintain the routing table
-ROUTING_TABLE_LOOKUP_INTERVAL = 10  # intervals between lookups
+ROUTING_TABLE_LOOKUP_INTERVAL = 60  # intervals between lookups
 ROUTING_TABLE_ANNOUNCE_INTERVAL = 600  # 10 minutes
 
 
@@ -40,6 +40,7 @@ class KademliaConfig(NamedTuple):
 
 class Kademlia(Service):
     logger = logging.getLogger('alexandria.kademlia.Kademlia')
+    content_index: DefaultDict[bytes, Set[NodeID]]
 
     def __init__(self,
                  routing_table: RoutingTableAPI,
@@ -112,6 +113,7 @@ class Kademlia(Service):
                 request = await subscription.receive()
                 self.logger.debug("handling request: %s", request)
 
+                found_nodes: Tuple[Node, ...]
                 if request.payload.distance == 0:
                     found_nodes = (self.client.local_node,)
                 else:
@@ -137,16 +139,14 @@ class Kademlia(Service):
             endpoint = self.endpoint_db.get_endpoint(node_id)
             yield Node(node_id, endpoint)
 
-    async def _verify_node(self, node: Node) -> bool:
+    async def _verify_node(self, node: Node) -> None:
         with trio.move_on_after(PING_TIMEOUT) as scope:
             await self.network.verify_and_add(node)
 
         if scope.cancelled_caught:
             self.logger.debug('node verification timed out: %s', node)
-            return False
         else:
             self.logger.debug('node verification succeeded: %s', node)
-            return True
 
     async def _lookup_occasionally(self) -> None:
         async with trio.open_nursery() as nursery:
@@ -201,12 +201,12 @@ class Kademlia(Service):
 
     async def _periodically_announce_content(self) -> None:
         async for _ in every(self.config.ANNOUNCE_INTERVAL):  # noqa: F841
-            for key, value in tuple(self.content_db):
-                content_node_id = sha256(key)
+            for key, value in tuple(self.content_db.items()):
+                content_node_id = content_key_to_node_id(key)
                 for node_id in self.routing_table.iter_nodes_around(content_node_id):
-                    endpoint = self.endpoint_db.get_endpoints(node_id)
+                    endpoint = self.endpoint_db.get_endpoint(node_id)
                     node = Node(node_id, endpoint)
-                    await self.send_advertise(node, key=key, node=self.client.local_node)
+                    await self.client.send_advertise(node, key=key, node=self.client.local_node)
 
     async def _handle_advertise_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Advertise) as subscription:
@@ -214,24 +214,24 @@ class Kademlia(Service):
                 request = await subscription.receive()
                 payload = request.payload
                 node_id, ip_address, port = payload.node
-                content_node_id = sha256(payload.key)
+                content_node_id = content_key_to_node_id(payload.key)
                 # TODO: ping the node to ensure it is available (unless it is the sending node).
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
                 self.content_index[content_node_id].add(payload.node)
-                await self.send_ack(request.node, request_id=payload.request_id)
+                await self.client.send_ack(request.node, request_id=payload.request_id)
 
     async def _handle_locate_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Locate) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
                 payload = request.payload
-                content_node_id = sha256(payload.key)
+                content_node_id = content_key_to_node_id(payload.key)
                 # TODO: ping the node to ensure it is available (unless it is the sending node).
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
                 locations = tuple(self.content_index[content_node_id])
-                await self.send_locations(
+                await self.client.send_locations(
                     request.node,
                     request_id=payload.request_id,
                     locations=locations,
@@ -250,4 +250,8 @@ class Kademlia(Service):
                 except KeyError:
                     data = b''
 
-                await self.send_chunks(request.node, request_id=payload.request_id, data=data)
+                await self.client.send_chunks(
+                    request.node,
+                    request_id=payload.request_id,
+                    data=data,
+                )

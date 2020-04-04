@@ -12,7 +12,7 @@ NODE_SEDES = sedes.Container((
 ))
 
 
-class Ping(sedes.Serializable):
+class Ping(sedes.Serializable):  # type: ignore
     fields = (
         ('request_id', sedes.uint16),
     )
@@ -23,7 +23,7 @@ class Ping(sedes.Serializable):
         return f"Ping({self.request_id})"
 
 
-class Pong(sedes.Serializable):
+class Pong(sedes.Serializable):  # type: ignore
     fields = (
         ('request_id', sedes.uint16),
     )
@@ -34,7 +34,7 @@ class Pong(sedes.Serializable):
         return f"Pong({self.request_id})"
 
 
-class FindNodes(sedes.Serializable):
+class FindNodes(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
         ("distance", sedes.uint16),
@@ -47,7 +47,7 @@ class FindNodes(sedes.Serializable):
         return f"FindNodes({self.request_id}, {self.distance})"
 
 
-class FoundNodes(sedes.Serializable):
+class FoundNodes(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
         ("total", sedes.uint8),
@@ -62,7 +62,7 @@ class FoundNodes(sedes.Serializable):
         return f"FindNodes({self.request_id}, {self.total}, {len(self.nodes)}"
 
 
-class Advertise(sedes.Serializable):
+class Advertise(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
         ("key", byte_list),
@@ -74,7 +74,7 @@ class Advertise(sedes.Serializable):
     key: bytes
 
 
-class Ack(sedes.Serializable):
+class Ack(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
     )
@@ -82,7 +82,7 @@ class Ack(sedes.Serializable):
     request_id: int
 
 
-class Locate(sedes.Serializable):
+class Locate(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
         ("key", byte_list),
@@ -92,7 +92,7 @@ class Locate(sedes.Serializable):
     key: bytes
 
 
-class Locations(sedes.Serializable):
+class Locations(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
         ("total", sedes.uint16),
@@ -104,7 +104,7 @@ class Locations(sedes.Serializable):
     nodes: Tuple[Tuple[NodeID, bytes, int]]
 
 
-class Retrieve(sedes.Serializable):
+class Retrieve(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
         ("key", byte_list),
@@ -114,7 +114,7 @@ class Retrieve(sedes.Serializable):
     key: bytes
 
 
-class Chunk(sedes.Serializable):
+class Chunk(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
         ("total", sedes.uint16),

@@ -160,32 +160,32 @@ class Client(Service, ClientAPI):
     # Send Messages: Content
     #
     async def send_advertise(self, node: Node, *, key: bytes) -> int:
-        request_id = self.client.message_dispatcher.get_free_request_id(node.node_id)
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Advertise(request_id, key),
             node,
         )
         self.logger.info("Sending %s", message)
-        await self.client.message_dispatcher.send_message(message)
+        await self.message_dispatcher.send_message(message)
         return request_id
 
     async def send_ack(self, node: Node, *, request_id: int) -> None:
-        request_id = self.client.message_dispatcher.get_free_request_id(node.node_id)
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Ack(request_id),
             node,
         )
         self.logger.info("Sending %s", message)
-        await self.client.message_dispatcher.send_message(message)
+        await self.message_dispatcher.send_message(message)
 
     async def send_locate(self, node: Node, *, key: bytes) -> int:
-        request_id = self.client.message_dispatcher.get_free_request_id(node.node_id)
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Locate(request_id, key),
             node,
         )
         self.logger.info("Sending %s", message)
-        await self.client.message_dispatcher.send_message(message)
+        await self.message_dispatcher.send_message(message)
         return request_id
 
     async def send_locations(self,
@@ -206,27 +206,27 @@ class Client(Service, ClientAPI):
                     Locations(request_id, total_batches, payload),
                     node,
                 )
-                await self.client.message_dispatcher.send_message(response)
+                await self.message_dispatcher.send_message(response)
             return total_batches
         else:
             response = Message(
                 Locations(request_id, 1, ()),
                 node,
             )
-            await self.client.message_dispatcher.send_message(response)
+            await self.message_dispatcher.send_message(response)
             return 1
 
     async def send_retrieve(self,
                             node: Node,
                             *,
                             key: bytes) -> int:
-        request_id = self.client.message_dispatcher.get_free_request_id(node.node_id)
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Retrieve(request_id, key),
             node,
         )
         self.logger.info("Sending %s", message)
-        await self.client.message_dispatcher.send_message(message)
+        await self.message_dispatcher.send_message(message)
         return request_id
 
     async def send_chunks(self,
@@ -239,7 +239,7 @@ class Client(Service, ClientAPI):
                 Chunk(request_id, 1, 0, b''),
                 node,
             )
-            await self.client.message_dispatcher.send_message(response)
+            await self.message_dispatcher.send_message(response)
             return 1
 
         all_chunks = split_data_to_chunks(data)
@@ -250,7 +250,7 @@ class Client(Service, ClientAPI):
                 Chunk(request_id, total_chunks, index, chunk),
                 node,
             )
-            await self.client.message_dispatcher.send_message(response)
+            await self.message_dispatcher.send_message(response)
 
         return total_chunks
 

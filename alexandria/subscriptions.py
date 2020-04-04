@@ -1,7 +1,9 @@
 from typing import (
+    Any,
     AsyncIterable,
     Callable,
     ContextManager,
+    Generator,
     Generic,
     Optional,
     Type,
@@ -31,7 +33,7 @@ class Subscription(ContextManager['Subscription[TItem]'], Generic[TItem]):
                  ) -> None:
         self._remove_fn()
 
-    def __await__(self) -> TItem:
+    def __await__(self) -> Generator[Any, None, TItem]:
         return self.receive().__await__()
 
     async def receive(self) -> TItem:

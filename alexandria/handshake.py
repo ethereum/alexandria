@@ -27,7 +27,7 @@ def ecdh_agree(private_key: keys.PrivateKey, public_key: keys.PublicKey) -> byte
     public_key_compressed = public_key.to_compressed_bytes()
     public_key_coincurve = coincurve.keys.PublicKey(public_key_compressed)
     secret_coincurve = public_key_coincurve.multiply(private_key.to_bytes())
-    return secret_coincurve.format()
+    return bytes(secret_coincurve.format())
 
 
 AES128Key = NewType("AES128Key", bytes)

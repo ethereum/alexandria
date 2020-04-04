@@ -41,7 +41,7 @@ logging_parser.add_argument(
     type=str,
     dest="log_level",
     help=(
-        "Configure the logging level. ",
+        "Configure the logging level. "
     ),
 )
 

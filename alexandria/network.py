@@ -66,7 +66,7 @@ class Network(NetworkAPI):
 
             try:
                 with trio.fail_after(FIND_NODES_TIMEOUT):
-                    found_nodes = await self.network.lookup(
+                    found_nodes = await self.single_lookup(
                         peer,
                         distance=distance,
                     )
