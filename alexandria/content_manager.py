@@ -150,25 +150,43 @@ class ContentManager(Service):
     async def _handle_advertise_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Advertise) as subscription:
             while self.manager.is_running:
-                response = await subscription.receive()
-                payload = response.payload
+                request = await subscription.receive()
+                payload = request.payload
                 node_id, ip_address, port = payload.node
+                content_node_id = sha256(payload.key)
                 # TODO: ping the node to ensure it is available (unless it is the sending node).
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
-                self.content_index[payload.key].add(payload.node)
+                self.content_index[content_node_id].add(payload.node)
+                await self.send_ack(request.node, request_id=payload.request_id)
 
     async def _handle_locate_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Locate) as subscription:
             while self.manager.is_running:
-                response = await subscription.receive()
-                payload = response.payload
-                key = ...
+                request = await subscription.receive()
+                payload = request.payload
+                content_node_id = sha256(payload.key)
                 # TODO: ping the node to ensure it is available (unless it is the sending node).
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
-                self.content_index[payload.key].add(payload.node)
+                locations = tuple(self.content_index[content_node_id])
+                await self.send_locations(
+                    request.node,
+                    request_id=payload.request_id,
+                    locations=locations,
+                )
 
     async def _handle_get_requests(self) -> None:
-        raise NotImplementedError
+        with self.client.message_dispatcher.subscribe(Retrieve) as subscription:
+            while self.manager.is_running:
+                request = await subscription.receive()
+                payload = request.payload
+                # TODO: ping the node to ensure it is available (unless it is the sending node).
+                # TODO: verify content is actually available
+                # TODO: check distance of key and store conditionally
+                try:
+                    data = self.content_db[payload.key]
+                except KeyError:
+                    data = b''
 
+                await self.send_chunks(request.node, request_id=payload.request_id, data=data)
