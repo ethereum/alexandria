@@ -276,7 +276,7 @@ class ClientAPI(ServiceAPI):
         ...
 
     @abstractmethod
-    async def send_advertise(self, node: Node, *, key: bytes) -> int:
+    async def send_advertise(self, node: Node, *, key: bytes, who: Node) -> int:
         ...
 
     @abstractmethod

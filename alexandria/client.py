@@ -159,7 +159,7 @@ class Client(Service, ClientAPI):
     #
     # Send Messages: Content
     #
-    async def send_advertise(self, node: Node, *, key: bytes) -> int:
+    async def send_advertise(self, node: Node, *, key: bytes, who: Node) -> int:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Advertise(request_id, key),

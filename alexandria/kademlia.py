@@ -206,7 +206,7 @@ class Kademlia(Service):
                 for node_id in self.routing_table.iter_nodes_around(content_node_id):
                     endpoint = self.endpoint_db.get_endpoint(node_id)
                     node = Node(node_id, endpoint)
-                    await self.client.send_advertise(node, key=key, node=self.client.local_node)
+                    await self.client.send_advertise(node, key=key, who=self.client.local_node)
 
     async def _handle_advertise_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Advertise) as subscription:
@@ -214,11 +214,10 @@ class Kademlia(Service):
                 request = await subscription.receive()
                 payload = request.payload
                 node_id, ip_address, port = payload.node
-                content_node_id = content_key_to_node_id(payload.key)
                 # TODO: ping the node to ensure it is available (unless it is the sending node).
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
-                self.content_index[content_node_id].add(payload.node)
+                self.content_index[payload.key].add(payload.node)
                 await self.client.send_ack(request.node, request_id=payload.request_id)
 
     async def _handle_locate_requests(self) -> None:
@@ -226,11 +225,10 @@ class Kademlia(Service):
             while self.manager.is_running:
                 request = await subscription.receive()
                 payload = request.payload
-                content_node_id = content_key_to_node_id(payload.key)
                 # TODO: ping the node to ensure it is available (unless it is the sending node).
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
-                locations = tuple(self.content_index[content_node_id])
+                locations = tuple(self.content_index[payload.key])
                 await self.client.send_locations(
                     request.node,
                     request_id=payload.request_id,
