@@ -40,7 +40,7 @@ async def test_application(bootnode):
 
     async with AsyncExitStack() as stack:
         for i in range(5):
-            await trio.sleep(random.randint(0, 2))
+            await trio.sleep(random.random())
             app = ApplicationFactory(bootnodes=bootnodes)
             logger.info('CLIENT-%d: %s', i, humanize_node_id(app.client.local_node_id))
             await stack.enter_async_context(background_trio_service(app))

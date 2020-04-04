@@ -335,7 +335,7 @@ class RoutingTableAPI(Collection[NodeID]):
 
 class NetworkAPI(ABC):
     @abstractmethod
-    async def simple_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
+    async def single_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
         ...
 
     @abstractmethod

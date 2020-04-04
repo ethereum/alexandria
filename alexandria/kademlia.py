@@ -1,12 +1,13 @@
+import collections
 import logging
 import secrets
-from typing import Iterable, Tuple
+from typing import Iterable, Mapping, NamedTuple, Tuple
 
 from async_service import Service
 from eth_utils import to_tuple
 import trio
 
-from alexandria._utils import every, humanize_node_id
+from alexandria._utils import every, humanize_node_id, sha256
 from alexandria.abc import (
     ClientAPI,
     EndpointDatabaseAPI,
@@ -15,12 +16,13 @@ from alexandria.abc import (
     RoutingTableAPI,
 )
 from alexandria.constants import PING_TIMEOUT
-from alexandria.payloads import FindNodes, Ping
+from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
 from alexandria.typing import NodeID
 
 
 ROUTING_TABLE_PING_INTERVAL = 30  # interval of outgoing pings sent to maintain the routing table
 ROUTING_TABLE_LOOKUP_INTERVAL = 10  # intervals between lookups
+ROUTING_TABLE_ANNOUNCE_INTERVAL = 600  # 10 minutes
 
 
 NodePayload = Tuple[NodeID, bytes, int]
@@ -30,26 +32,49 @@ class _EmptyFindNodesResponse(Exception):
     pass
 
 
-class RoutingTableManager(Service):
-    logger = logging.getLogger('alexandria.routing_table_manager.RoutingTableManager')
+class KademliaConfig(NamedTuple):
+    LOOKUP_INTERVAL: int = ROUTING_TABLE_LOOKUP_INTERVAL
+    PING_INTERVAL: int = ROUTING_TABLE_PING_INTERVAL
+    ANNOUNCE_INTERVAL: int = ROUTING_TABLE_ANNOUNCE_INTERVAL
+
+
+class Kademlia(Service):
+    logger = logging.getLogger('alexandria.kademlia.Kademlia')
 
     def __init__(self,
                  routing_table: RoutingTableAPI,
                  endpoint_db: EndpointDatabaseAPI,
+                 content_db: Mapping[bytes, bytes],
                  client: ClientAPI,
                  network: NetworkAPI,
+                 config: KademliaConfig = None,
                  ) -> None:
+        self.content_db = content_db
+        self.content_index = collections.defaultdict(set)
         self.endpoint_db = endpoint_db
         self.routing_table = routing_table
         self.client = client
         self.network = network
 
+        if config is None:
+            config = KademliaConfig()
+        self.config = config
+
     async def run(self) -> None:
         self.manager.run_daemon_task(self._periodic_report_routing_table_status)
+
         self.manager.run_daemon_task(self._pong_when_pinged)
+        self.manager.run_daemon_task(self._handle_lookup_requests)
+
+        self.manager.run_daemon_task(self._handle_advertise_requests)
+        self.manager.run_daemon_task(self._handle_locate_requests)
+        self.manager.run_daemon_task(self._handle_retrieve_requests)
+
+        self.manager.run_daemon_task(self._periodically_announce_content)
+
         self.manager.run_daemon_task(self._ping_occasionally)
         self.manager.run_daemon_task(self._lookup_occasionally)
-        self.manager.run_daemon_task(self._handle_lookup_requests)
+
         await self.manager.wait_finished()
 
     async def _periodic_report_routing_table_status(self) -> None:
@@ -67,6 +92,9 @@ class RoutingTableManager(Service):
                     "         - %d nodes\n"
                     "         - full buckets: %s\n"
                     "         - %d nodes in replacement cache\n"
+                    "       ContentDB():\n"
+                    "         - content: %d\n"
+                    "         - index: %d\n"
                     "####################################################"
                 ),
                 stats.bucket_size,
@@ -74,6 +102,8 @@ class RoutingTableManager(Service):
                 stats.total_nodes,
                 full_buckets,
                 stats.num_in_replacement_cache,
+                len(self.content_db),
+                sum(len(location_keys) for location_keys in self.content_index.values()),
             )
 
     async def _handle_lookup_requests(self) -> None:
@@ -120,7 +150,7 @@ class RoutingTableManager(Service):
 
     async def _lookup_occasionally(self) -> None:
         async with trio.open_nursery() as nursery:
-            async for _ in every(ROUTING_TABLE_LOOKUP_INTERVAL):  # noqa: F841
+            async for _ in every(self.config.LOOKUP_INTERVAL):  # noqa: F841
                 if self.routing_table.is_empty:
                     self.logger.debug('Aborting scheduled lookup due to empty routing table')
                     continue
@@ -136,7 +166,7 @@ class RoutingTableManager(Service):
                     nursery.start_soon(self._verify_node, node)
 
     async def _ping_occasionally(self) -> None:
-        async for _ in every(ROUTING_TABLE_PING_INTERVAL):  # noqa: F841
+        async for _ in every(self.config.PING_INTERVAL):  # noqa: F841
             if self.routing_table.is_empty:
                 self.logger.warning("Routing table is empty, no one to ping")
                 continue
@@ -168,3 +198,56 @@ class RoutingTableManager(Service):
                     request.node,
                 )
                 await self.client.send_pong(request.node, request_id=request.payload.request_id)
+
+    async def _periodically_announce_content(self) -> None:
+        async for _ in every(self.config.ANNOUNCE_INTERVAL):  # noqa: F841
+            for key, value in tuple(self.content_db):
+                content_node_id = sha256(key)
+                for node_id in self.routing_table.iter_nodes_around(content_node_id):
+                    endpoint = self.endpoint_db.get_endpoints(node_id)
+                    node = Node(node_id, endpoint)
+                    await self.send_advertise(node, key=key, node=self.client.local_node)
+
+    async def _handle_advertise_requests(self) -> None:
+        with self.client.message_dispatcher.subscribe(Advertise) as subscription:
+            while self.manager.is_running:
+                request = await subscription.receive()
+                payload = request.payload
+                node_id, ip_address, port = payload.node
+                content_node_id = sha256(payload.key)
+                # TODO: ping the node to ensure it is available (unless it is the sending node).
+                # TODO: verify content is actually available
+                # TODO: check distance of key and store conditionally
+                self.content_index[content_node_id].add(payload.node)
+                await self.send_ack(request.node, request_id=payload.request_id)
+
+    async def _handle_locate_requests(self) -> None:
+        with self.client.message_dispatcher.subscribe(Locate) as subscription:
+            while self.manager.is_running:
+                request = await subscription.receive()
+                payload = request.payload
+                content_node_id = sha256(payload.key)
+                # TODO: ping the node to ensure it is available (unless it is the sending node).
+                # TODO: verify content is actually available
+                # TODO: check distance of key and store conditionally
+                locations = tuple(self.content_index[content_node_id])
+                await self.send_locations(
+                    request.node,
+                    request_id=payload.request_id,
+                    locations=locations,
+                )
+
+    async def _handle_retrieve_requests(self) -> None:
+        with self.client.message_dispatcher.subscribe(Retrieve) as subscription:
+            while self.manager.is_running:
+                request = await subscription.receive()
+                payload = request.payload
+                # TODO: ping the node to ensure it is available (unless it is the sending node).
+                # TODO: verify content is actually available
+                # TODO: check distance of key and store conditionally
+                try:
+                    data = self.content_db[payload.key]
+                except KeyError:
+                    data = b''
+
+                await self.send_chunks(request.node, request_id=payload.request_id, data=data)

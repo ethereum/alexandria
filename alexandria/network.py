@@ -1,6 +1,7 @@
 import collections
 import ipaddress
 import itertools
+import logging
 import math
 from typing import Iterable, Sequence, Tuple
 
@@ -26,16 +27,19 @@ LOOKUP_CONCURRENCY_FACTOR = 3  # maximum number of concurrent FindNodes lookups
 
 
 class Network(NetworkAPI):
+    logger = logging.getLogger('alexandria.network.Network')
+
     def __init__(self,
                  client: ClientAPI,
                  endpoint_db: EndpointDatabaseAPI,
                  routing_table: RoutingTableAPI,
                  ) -> None:
         self.client = client
+        self.endpoint_db = endpoint_db
         self.routing_table = routing_table
 
-    async def simple_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
-        found_nodes = await self.client.find_nodes(node, distance)
+    async def single_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
+        found_nodes = await self.client.find_nodes(node, distance=distance)
         return tuple(
             Node(node_id, Endpoint(ipaddress.IPv4Address(ip_address), port))
             for message in found_nodes
@@ -155,7 +159,7 @@ class Network(NetworkAPI):
 
         distance = compute_log_distance(self.client.local_node_id, node.node_id)
 
-        found_nodes = await self.client.lookup(node, distance=distance)
+        found_nodes = await self.single_lookup(node, distance=distance)
 
         self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
         self.routing_table.update(node.node_id)

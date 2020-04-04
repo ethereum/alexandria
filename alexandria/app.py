@@ -9,9 +9,9 @@ from alexandria._utils import humanize_node_id
 from alexandria.abc import ClientAPI, Endpoint, EndpointDatabaseAPI, Node, RoutingTableAPI
 from alexandria.client import Client
 from alexandria.endpoint_db import MemoryEndpointDB
+from alexandria.kademlia import Kademlia
 from alexandria.network import Network
 from alexandria.routing_table import RoutingTable
-from alexandria.routing_table_manager import RoutingTableManager
 
 
 BOND_TIMEOUT = 10
@@ -35,6 +35,7 @@ class Application(Service):
         )
         self.bootnodes = bootnodes
         self.endpoint_db = MemoryEndpointDB()
+        self.content_db = {}
         self.routing_table = RoutingTable(
             self.client.local_node_id,
             bucket_size=256,
@@ -44,8 +45,9 @@ class Application(Service):
             endpoint_db=self.endpoint_db,
             routing_table=self.routing_table,
         )
-        self._routing_table_manager = RoutingTableManager(
+        self._kademlia = Kademlia(
             routing_table=self.routing_table,
+            content_db=self.content_db,
             endpoint_db=self.endpoint_db,
             client=self.client,
             network=self.network,
@@ -59,7 +61,7 @@ class Application(Service):
         await trio.sleep(0.1)
 
         self.manager.run_task(self._bootstrap)
-        self.manager.run_daemon_child_service(self._routing_table_manager)
+        self.manager.run_daemon_child_service(self._kademlia)
         self.manager.run_daemon_task(self._monitor_endpoints)
 
         await self.manager.wait_finished()

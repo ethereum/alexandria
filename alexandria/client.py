@@ -1,13 +1,18 @@
 import logging
-from typing import Sequence
+from typing import Collection, Tuple, Type
 
 from async_service import Service, background_trio_service
 from eth_keys import keys
 from eth_utils import ValidationError
 from eth_utils.toolz import partition_all
+from ssz import sedes
 import trio
 
-from alexandria._utils import public_key_to_node_id, humanize_node_id
+from alexandria._utils import (
+    public_key_to_node_id,
+    humanize_node_id,
+    split_data_to_chunks,
+)
 from alexandria.abc import (
     ClientAPI,
     Datagram,
@@ -15,6 +20,7 @@ from alexandria.abc import (
     MessageAPI,
     Node,
     SessionAPI,
+    TPayload,
 )
 from alexandria.constants import NODES_PER_PAYLOAD
 from alexandria.datagrams import DatagramListener
@@ -24,7 +30,13 @@ from alexandria.packets import decode_packet, NetworkPacket
 from alexandria.pool import Pool
 from alexandria.messages import Message
 from alexandria.message_dispatcher import MessageDispatcher
-from alexandria.payloads import FindNodes, FoundNodes, Ping, Pong
+from alexandria.payloads import (
+    FindNodes, FoundNodes,
+    Ping, Pong,
+    Advertise, Ack,
+    Locate, Locations,
+    Retrieve, Chunk,
+)
 from alexandria.tags import recover_source_id_from_tag
 
 
@@ -86,7 +98,7 @@ class Client(Service, ClientAPI):
         )
 
     #
-    # Singular Message Sending
+    # Send Mesasges: Routing
     #
     async def send_ping(self, node: Node) -> int:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
@@ -120,7 +132,7 @@ class Client(Service, ClientAPI):
                                node: Node,
                                *,
                                request_id: int,
-                               found_nodes: Sequence[Node]) -> int:
+                               found_nodes: Collection[Node]) -> int:
         batches = tuple(partition_all(NODES_PER_PAYLOAD, found_nodes))
         self.logger.info("Sending FoundNodes with %d nodes to %s", len(found_nodes), node)
         if batches:
@@ -145,18 +157,140 @@ class Client(Service, ClientAPI):
             return 1
 
     #
+    # Send Messages: Content
+    #
+    async def send_advertise(self, node: Node, *, key: bytes) -> int:
+        request_id = self.client.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(
+            Advertise(request_id, key),
+            node,
+        )
+        self.logger.info("Sending %s", message)
+        await self.client.message_dispatcher.send_message(message)
+        return request_id
+
+    async def send_ack(self, node: Node, *, request_id: int) -> None:
+        request_id = self.client.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(
+            Ack(request_id),
+            node,
+        )
+        self.logger.info("Sending %s", message)
+        await self.client.message_dispatcher.send_message(message)
+
+    async def send_locate(self, node: Node, *, key: bytes) -> int:
+        request_id = self.client.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(
+            Locate(request_id, key),
+            node,
+        )
+        self.logger.info("Sending %s", message)
+        await self.client.message_dispatcher.send_message(message)
+        return request_id
+
+    async def send_locations(self,
+                             node: Node,
+                             *,
+                             request_id: int,
+                             locations: Collection[Node]) -> int:
+        batches = tuple(partition_all(NODES_PER_PAYLOAD, locations))
+        self.logger.info("Sending Locations with %d nodes to %s", len(locations), node)
+        if batches:
+            total_batches = len(batches)
+            for batch in batches:
+                payload = tuple(
+                    (node.node_id, node.endpoint.ip_address.packed, node.endpoint.port)
+                    for node in batch
+                )
+                response = Message(
+                    Locations(request_id, total_batches, payload),
+                    node,
+                )
+                await self.client.message_dispatcher.send_message(response)
+            return total_batches
+        else:
+            response = Message(
+                Locations(request_id, 1, ()),
+                node,
+            )
+            await self.client.message_dispatcher.send_message(response)
+            return 1
+
+    async def send_retrieve(self,
+                            node: Node,
+                            *,
+                            key: bytes) -> int:
+        request_id = self.client.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(
+            Retrieve(request_id, key),
+            node,
+        )
+        self.logger.info("Sending %s", message)
+        await self.client.message_dispatcher.send_message(message)
+        return request_id
+
+    async def send_chunks(self,
+                          node: Node,
+                          *,
+                          request_id: int,
+                          data: bytes) -> int:
+        if not data:
+            response = Message(
+                Chunk(request_id, 1, 0, b''),
+                node,
+            )
+            await self.client.message_dispatcher.send_message(response)
+            return 1
+
+        all_chunks = split_data_to_chunks(data)
+        total_chunks = len(all_chunks)
+
+        for index, chunk in enumerate(all_chunks):
+            response = Message(
+                Chunk(request_id, total_chunks, index, chunk),
+                node,
+            )
+            await self.client.message_dispatcher.send_message(response)
+
+        return total_chunks
+
+    #
     # Request/Response
     #
-    async def ping(self, node: Node) -> Pong:
+    async def ping(self, node: Node) -> MessageAPI[Pong]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Ping(request_id), node)
         with self.message_dispatcher.subscribe_request(message, Pong) as subscription:
             return await subscription.receive()
 
-    async def find_nodes(self, node: Node, distance: int) -> FoundNodes:
+    async def find_nodes(self, node: Node, *, distance: int) -> Tuple[MessageAPI[FoundNodes], ...]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(FindNodes(request_id, distance), node)
-        with self.message_dispatcher.subscribe_request(message, FoundNodes) as subscription:
+        return await self._do_request_with_multi_response(message, FoundNodes)
+
+    async def advertise(self, node: Node, *, key: bytes, who: Node) -> MessageAPI[Ack]:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        node_payload = (who.node_id, who.endpoint.ip_address.packed, who.endpoint.port)
+        message = Message(Advertise(request_id, key, node_payload), who)
+        with self.message_dispatcher.subscribe_request(message, Ack) as subscription:
+            return await subscription.receive()
+
+    async def locate(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Locations], ...]:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(Locate(request_id, key), node)
+        await self._do_request_with_multi_response(message, Locations)
+
+    async def retrieve(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Chunk], ...]:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(Retrieve(request_id, key), node)
+        await self._do_request_with_multi_response(message, Chunk)
+
+    async def _do_request_with_multi_response(self,
+                                              request: MessageAPI[sedes.Serializable],
+                                              response_payload_type: Type[TPayload],
+                                              ) -> Tuple[MessageAPI[TPayload], ...]:
+        subscription = self.message_dispatcher.subscribe_request(request, response_payload_type)
+        with subscription:
             responses = []
             total_messages = None
             while True:
@@ -174,7 +308,7 @@ class Client(Service, ClientAPI):
                 responses.append(response)
                 if len(responses) >= total_messages:
                     break
-            return responses
+            return tuple(responses)
 
     #
     # Utilities
