@@ -19,6 +19,12 @@ from alexandria.abc import Endpoint, Node
 from alexandria.app import Application
 from alexandria.client import Client
 from alexandria.constants import KEY_BYTE_SIZE
+from alexandria.kademlia import (
+    KADEMLIA_LOOKUP_INTERVAL,
+    KADEMLIA_PING_INTERVAL,
+    KADEMLIA_ANNOUNCE_INTERVAL,
+    KademliaConfig,
+)
 
 
 def _mk_private_key_bytes() -> bytes:
@@ -95,6 +101,15 @@ class ClientFactory(factory.Factory):  # type: ignore
     listen_on = factory.SubFactory(EndpointFactory)
 
 
+class KademliaConfigFactory(factory.Factory):  # type: ignore
+    class Meta:
+        model = KademliaConfig
+
+    LOOKUP_INTERVAL = factory.LazyFunction(lambda: KADEMLIA_LOOKUP_INTERVAL)
+    PING_INTERVAL: int = factory.LazyFunction(lambda: KADEMLIA_PING_INTERVAL)
+    ANNOUNCE_INTERVAL: int = factory.LazyFunction(lambda: KADEMLIA_ANNOUNCE_INTERVAL)
+
+
 class ApplicationFactory(factory.Factory):  # type: ignore
     class Meta:
         model = Application
@@ -102,3 +117,5 @@ class ApplicationFactory(factory.Factory):  # type: ignore
     bootnodes = factory.LazyFunction(lambda: tuple())
     private_key = factory.SubFactory(PrivateKeyFactory)
     listen_on = factory.SubFactory(EndpointFactory)
+    config = factory.SubFactory(KademliaConfigFactory)
+    content_db = factory.LazyFunction(lambda: {})

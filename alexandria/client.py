@@ -162,8 +162,9 @@ class Client(Service, ClientAPI):
     #
     async def send_advertise(self, node: Node, *, key: bytes, who: Node) -> int:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        node_payload = (who.node_id, who.endpoint.ip_address.packed, who.endpoint.port)
         message = Message(
-            Advertise(request_id, key),
+            Advertise(request_id, key, node_payload),
             node,
         )
         self.logger.info("Sending %s", message)
@@ -272,7 +273,7 @@ class Client(Service, ClientAPI):
     async def advertise(self, node: Node, *, key: bytes, who: Node) -> MessageAPI[Ack]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         node_payload = (who.node_id, who.endpoint.ip_address.packed, who.endpoint.port)
-        message = Message(Advertise(request_id, key, node_payload), who)
+        message = Message(Advertise(request_id, key, node_payload), node)
         with self.message_dispatcher.subscribe_request(message, Ack) as subscription:
             return await subscription.receive()
 

@@ -1,7 +1,7 @@
 import pytest
 import trio
 
-from alexandria.payloads import Ping, Pong, FindNodes, FoundNodes
+from alexandria.payloads import Advertise, Ping, Pong, FindNodes, FoundNodes
 
 
 @pytest.mark.trio
@@ -69,3 +69,25 @@ async def test_client_send_found_nodes(alice_and_bob_clients):
         payload = message.payload
         assert isinstance(payload, FoundNodes)
         assert payload.total == total_messages
+
+
+@pytest.mark.trio
+async def test_client_send_advertise(alice_and_bob_clients):
+    alice, bob = alice_and_bob_clients
+
+    with bob.message_dispatcher.subscribe(Advertise) as subscription:
+        request_id = await alice.send_advertise(
+            bob.local_node,
+            key=b'key',
+            who=bob.local_node,
+        )
+
+        with trio.fail_after(1):
+            message = await subscription.receive()
+
+        assert message.node == alice.local_node
+        payload = message.payload
+        assert isinstance(payload, Advertise)
+        assert payload.request_id == request_id
+        assert payload.key == b'key'
+        assert payload.node == (bob.local_node_id, bob.listen_on.ip_address.packed, bob.listen_on.port)  # noqa: E501

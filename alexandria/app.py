@@ -9,7 +9,7 @@ from alexandria._utils import humanize_node_id
 from alexandria.abc import ClientAPI, Endpoint, EndpointDatabaseAPI, Node, RoutingTableAPI
 from alexandria.client import Client
 from alexandria.endpoint_db import MemoryEndpointDB
-from alexandria.kademlia import Kademlia
+from alexandria.kademlia import Kademlia, KademliaConfig
 from alexandria.network import Network
 from alexandria.routing_table import RoutingTable
 
@@ -24,19 +24,23 @@ class Application(Service):
     content_db: Dict[bytes, bytes]
     endpoint_db: EndpointDatabaseAPI
     routing_table: RoutingTableAPI
+    config: KademliaConfig
 
     def __init__(self,
                  bootnodes: Collection[Node],
                  private_key: keys.PrivateKey,
                  listen_on: Endpoint,
+                 content_db: Dict[bytes, bytes],
+                 config: KademliaConfig,
                  ) -> None:
+        self.config = config
         self.client = Client(
             private_key=private_key,
             listen_on=listen_on,
         )
         self.bootnodes = bootnodes
         self.endpoint_db = MemoryEndpointDB()
-        self.content_db = {}
+        self.content_db = content_db
         self.routing_table = RoutingTable(
             self.client.local_node_id,
             bucket_size=256,
@@ -52,6 +56,7 @@ class Application(Service):
             endpoint_db=self.endpoint_db,
             client=self.client,
             network=self.network,
+            config=self.config,
         )
 
     async def run(self) -> None:

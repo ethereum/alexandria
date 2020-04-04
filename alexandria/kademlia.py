@@ -20,9 +20,9 @@ from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
 from alexandria.typing import NodeID
 
 
-ROUTING_TABLE_PING_INTERVAL = 30  # interval of outgoing pings sent to maintain the routing table
-ROUTING_TABLE_LOOKUP_INTERVAL = 60  # intervals between lookups
-ROUTING_TABLE_ANNOUNCE_INTERVAL = 600  # 10 minutes
+KADEMLIA_PING_INTERVAL = 30  # interval of outgoing pings sent to maintain the routing table
+KADEMLIA_LOOKUP_INTERVAL = 60  # intervals between lookups
+KADEMLIA_ANNOUNCE_INTERVAL = 600  # 10 minutes
 
 
 NodePayload = Tuple[NodeID, bytes, int]
@@ -33,9 +33,9 @@ class _EmptyFindNodesResponse(Exception):
 
 
 class KademliaConfig(NamedTuple):
-    LOOKUP_INTERVAL: int = ROUTING_TABLE_LOOKUP_INTERVAL
-    PING_INTERVAL: int = ROUTING_TABLE_PING_INTERVAL
-    ANNOUNCE_INTERVAL: int = ROUTING_TABLE_ANNOUNCE_INTERVAL
+    LOOKUP_INTERVAL: int = KADEMLIA_LOOKUP_INTERVAL
+    PING_INTERVAL: int = KADEMLIA_PING_INTERVAL
+    ANNOUNCE_INTERVAL: int = KADEMLIA_ANNOUNCE_INTERVAL
 
 
 class Kademlia(Service):

@@ -3,7 +3,7 @@ import ipaddress
 import itertools
 import logging
 import math
-from typing import DefaultDict, Iterable, Sequence, Set, Tuple
+from typing import DefaultDict, Iterable, Optional, Sequence, Set, Tuple
 
 from eth_utils import to_tuple
 from eth_utils.toolz import take
@@ -131,10 +131,11 @@ class Network(NetworkAPI):
             for endpoint in endpoints
         )
         self.logger.info(
-            "Finished looking up %s in %d rounds: Found %d nodes",
+            "Finished looking up %s in %d rounds: Found %d nodes after querying %d nodes",
             humanize_node_id(target_id),
             lookup_round_number,
             len(found_nodes),
+            len(queried_node_ids),
         )
         return found_nodes
 
@@ -176,7 +177,7 @@ def iter_closest_nodes(target: NodeID,
     """Iterate over the nodes in the routing table as well as additional nodes in order of
     distance to the target. Duplicates will only be yielded once.
     """
-    def dist(node: NodeID) -> float:
+    def dist(node: Optional[NodeID]) -> float:
         if node is not None:
             return compute_distance(target, node)
         else:
@@ -188,13 +189,16 @@ def iter_closest_nodes(target: NodeID,
     closest_routing = next(routing_iter, None)
     closest_seen = next(seen_iter, None)
 
-    while closest_routing is not None and closest_seen is not None:
+    while not (closest_routing is None and closest_seen is None):
         if dist(closest_routing) < dist(closest_seen):
             node_to_yield = closest_routing
             closest_routing = next(routing_iter, None)
         else:
             node_to_yield = closest_seen
             closest_seen = next(seen_iter, None)
+
+        if node_to_yield is None:
+            raise Exception("Invariant")
 
         if node_to_yield not in yielded_nodes:
             yielded_nodes.add(node_to_yield)
