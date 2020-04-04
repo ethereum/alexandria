@@ -51,7 +51,7 @@ class FoundNodes(sedes.Serializable):
     fields = (
         ("request_id", sedes.uint16),
         ("total", sedes.uint8),
-        ("nodes", sedes.List(NODE_SEDES))
+        ("nodes", sedes.List(NODE_SEDES, max_length=2**32))
     )
 
     request_id: int
@@ -62,7 +62,7 @@ class FoundNodes(sedes.Serializable):
         return f"FindNodes({self.request_id}, {self.total}, {len(self.nodes)}"
 
 
-class Has(sedes.Serializable):
+class Advertise(sedes.Serializable):
     fields = (
         ("request_id", sedes.uint16),
         ("key", byte_list),
@@ -92,11 +92,11 @@ class Locate(sedes.Serializable):
     key: bytes
 
 
-class Providers(sedes.Serializable):
+class Locations(sedes.Serializable):
     fields = (
         ("request_id", sedes.uint16),
         ("total", sedes.uint16),
-        ("nodes", sedes.List(NODE_SEDES))
+        ("nodes", sedes.List(NODE_SEDES, max_length=2**32))
     )
 
     request_id: int
@@ -104,7 +104,7 @@ class Providers(sedes.Serializable):
     nodes: Tuple[Tuple[NodeID, bytes, int]]
 
 
-class Get(sedes.Serializable):
+class Retrieve(sedes.Serializable):
     fields = (
         ("request_id", sedes.uint16),
         ("key", byte_list),

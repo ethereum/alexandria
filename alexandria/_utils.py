@@ -1,11 +1,12 @@
 import hashlib
 import itertools
-from typing import AsyncGenerator, Optional
+import math
+from typing import AsyncGenerator, Iterable, Optional
 
 from eth_keys import keys
 import trio
 
-from eth_utils import humanize_hash
+from eth_utils import humanize_hash, to_tuple
 from alexandria.typing import NodeID
 
 
@@ -51,3 +52,11 @@ async def every(interval: float,
         additional_delay = yield yield_time
         if additional_delay is not None:
             delay += additional_delay
+
+
+@to_tuple
+def split_data_to_chunks(chunk_size: int, data: bytes) -> Iterable[bytes]:
+    num_chunks = int(math.ceil(len(data) / chunk_size))
+    data_view = memoryview(data)
+    for chunk_number in range(num_chunks):
+        yield data_view[chunk_number * chunk_size:chunk_number * chunk_size + chunk_size]

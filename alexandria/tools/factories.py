@@ -1,3 +1,4 @@
+import collections
 import ipaddress
 import secrets
 import socket
@@ -41,7 +42,26 @@ class PublicKeyFactory(factory.Factory):
     public_key_bytes = factory.LazyFunction(_mk_public_key_bytes)
 
 
+PORT_CACHE = collections.deque()
+PORT_CACHE_SIZE = 256
+
+
 def get_open_port() -> int:
+    while True:
+        port = _get_open_port()
+        if port in PORT_CACHE:
+            continue
+        else:
+            break
+    if port not in PORT_CACHE:
+        PORT_CACHE.append(port)
+        while len(PORT_CACHE) > PORT_CACHE_SIZE:
+            PORT_CACHE.popleft()
+
+    return port
+
+
+def _get_open_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("", 0))
     s.listen(1)

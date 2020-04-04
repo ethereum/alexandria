@@ -9,6 +9,7 @@ from alexandria._utils import humanize_node_id
 from alexandria.abc import ClientAPI, Endpoint, EndpointDatabaseAPI, Node, RoutingTableAPI
 from alexandria.client import Client
 from alexandria.endpoint_db import MemoryEndpointDB
+from alexandria.network import Network
 from alexandria.routing_table import RoutingTable
 from alexandria.routing_table_manager import RoutingTableManager
 
@@ -38,10 +39,16 @@ class Application(Service):
             self.client.local_node_id,
             bucket_size=256,
         )
+        self.network = Network(
+            client=self.client,
+            endpoint_db=self.endpoint_db,
+            routing_table=self.routing_table,
+        )
         self._routing_table_manager = RoutingTableManager(
             routing_table=self.routing_table,
             endpoint_db=self.endpoint_db,
             client=self.client,
+            network=self.network,
         )
 
     async def run(self) -> None:
@@ -73,23 +80,8 @@ class Application(Service):
                 self.routing_table.update(session.remote_node_id)
 
     async def _bond(self, node: Node) -> None:
-        """
-        Establish a session with the given node if one is not already present.
-        """
-        if self.client.pool.has_session(node.node_id):
-            self.logger.debug('Skipping bond. Session already active with %s', node)
-            return
-
-        self.logger.debug('Initiating bond with: %s', node)
-
-        with trio.move_on_after(BOND_TIMEOUT) as scope:
-            await self.client.ping(node)
-            self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
-            self.routing_table.update(node.node_id)
-            self.logger.info('Bonded successfully with: %s | EMPTY %s', node, self.routing_table.is_empty)  # noqa: E501
-
-        if scope.cancelled_caught:
-            self.logger.debug('Timed out bonding with: %s', node)
+        with trio.move_on_after(BOND_TIMEOUT):
+            await self.network.bond(node)
 
     async def _bootstrap(self) -> None:
         self.logger.info("Attempting to bond with %d bootnodes", len(self.bootnodes))

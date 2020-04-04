@@ -331,3 +331,21 @@ class RoutingTableAPI(Collection[NodeID]):
     @abstractmethod
     def iter_nodes_around(self, reference_node_id: NodeID) -> Iterator[NodeID]:
         ...
+
+
+class NetworkAPI(ABC):
+    @abstractmethod
+    async def simple_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
+        ...
+
+    @abstractmethod
+    async def iterative_lookup(self, target_id: NodeID) -> Tuple[Node, ...]:
+        ...
+
+    @abstractmethod
+    async def verify_and_add(self, node: Node) -> None:
+        ...
+
+    @abstractmethod
+    async def bond(self, node: Node) -> None:
+        ...

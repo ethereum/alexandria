@@ -1,7 +1,6 @@
 import logging
 from typing import Sequence
 
-
 from async_service import Service, background_trio_service
 from eth_keys import keys
 from eth_utils import ValidationError
