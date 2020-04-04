@@ -1,4 +1,4 @@
-from typing import Mapping, Type
+from typing import Any, Dict, Type
 
 import ssz
 from ssz import sedes
@@ -7,14 +7,14 @@ from alexandria.abc import RegistryAPI, TPayload
 
 
 class Registry(RegistryAPI):
-    _payload_sedes: Mapping[int, Type[sedes.Serializable]]
-    _message_id_lookup: Mapping[Type[sedes.Serializable], int]
+    _payload_sedes: Dict[int, Type[Any]]
+    _message_id_lookup: Dict[Type[Any], int]
 
     def __init__(self) -> None:
         self._payload_sedes = {}
         self._message_id_lookup = {}
 
-    def register(self, message_id: int, payload_type: Type[sedes.Serializable]) -> None:
+    def register(self, message_id: int, payload_type: Type[Any]) -> None:
         if message_id in self._payload_sedes:
             raise ValueError(
                 f"Cannot register {payload_type} with "

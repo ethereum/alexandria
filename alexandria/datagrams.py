@@ -30,7 +30,7 @@ async def _handle_inbound(socket: trio.socket.SocketType,
 
 
 async def _handle_outbound(socket: trio.socket.SocketType,
-                           receive_channel: trio.abc.SendChannel[Datagram],
+                           receive_channel: trio.abc.ReceiveChannel[Datagram],
                            ) -> None:
     async with receive_channel:
         async for datagram in receive_channel:

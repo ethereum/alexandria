@@ -3,7 +3,7 @@ import ipaddress
 import itertools
 import logging
 import math
-from typing import Iterable, Sequence, Tuple
+from typing import DefaultDict, Iterable, Sequence, Set, Tuple
 
 from eth_utils import to_tuple
 from eth_utils.toolz import take
@@ -50,9 +50,9 @@ class Network(NetworkAPI):
         self.logger.info("Starting looking up @ %s", humanize_node_id(target_id))
 
         # tracks the nodes that have already been queried
-        queried_node_ids = set()
+        queried_node_ids: Set[NodeID] = set()
         # keeps track of the nodes that are unresponsive
-        unresponsive_node_ids = set()
+        unresponsive_node_ids: Set[NodeID] = set()
         # accumulator of all of the valid responses received
         received_nodes: DefaultDict[NodeID, Set[Endpoint]] = collections.defaultdict(set)
 
@@ -60,7 +60,7 @@ class Network(NetworkAPI):
             self.logger.debug(
                 "Looking up %s via node %s",
                 humanize_node_id(target_id),
-                humanize_node_id(peer),
+                humanize_node_id(peer.node_id),
             )
             distance = compute_log_distance(peer.node_id, target_id)
 
@@ -188,7 +188,7 @@ def iter_closest_nodes(target: NodeID,
     closest_routing = next(routing_iter, None)
     closest_seen = next(seen_iter, None)
 
-    while not (closest_routing is None and closest_seen is None):
+    while closest_routing is not None and closest_seen is not None:
         if dist(closest_routing) < dist(closest_seen):
             node_to_yield = closest_routing
             closest_routing = next(routing_iter, None)

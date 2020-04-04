@@ -228,7 +228,11 @@ class Kademlia(Service):
                 # TODO: ping the node to ensure it is available (unless it is the sending node).
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
-                locations = tuple(self.content_index[payload.key])
+                location_ids = tuple(self.content_index[payload.key])
+                locations = tuple(
+                    Node(node_id, self.endpoint_db.get_endpoint(node_id))
+                    for node_id in location_ids
+                )
                 await self.client.send_locations(
                     request.node,
                     request_id=payload.request_id,

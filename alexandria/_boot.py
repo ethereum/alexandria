@@ -46,14 +46,11 @@ class BootService(Service):
             self.manager.cancel()
 
 
-def _boot():
+def _boot() -> None:
     try:
         manager = TrioManager(BootService())
 
-        try:
-            trio.run(manager.run)
-        except BaseException as err:
-            raise
+        trio.run(manager.run)
     except KeyboardInterrupt:
         import logging
         import sys

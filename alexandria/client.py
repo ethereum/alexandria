@@ -18,6 +18,7 @@ from alexandria.abc import (
     Datagram,
     Endpoint,
     MessageAPI,
+    NetworkPacket,
     Node,
     SessionAPI,
     TPayload,
@@ -26,7 +27,7 @@ from alexandria.constants import NODES_PER_PAYLOAD
 from alexandria.datagrams import DatagramListener
 from alexandria.exceptions import SessionNotFound
 from alexandria.events import Events
-from alexandria.packets import decode_packet, NetworkPacket
+from alexandria.packets import decode_packet
 from alexandria.pool import Pool
 from alexandria.messages import Message
 from alexandria.message_dispatcher import MessageDispatcher
@@ -78,11 +79,11 @@ class Client(Service, ClientAPI):
         (
             self._outbound_message_send_channel,
             self._outbound_message_receive_channel,
-        ) = trio.open_memory_channel[MessageAPI](0)
+        ) = trio.open_memory_channel[MessageAPI[sedes.Serializable]](0)
         (
             self._inbound_message_send_channel,
             self._inbound_message_receive_channel,
-        ) = trio.open_memory_channel[MessageAPI](0)
+        ) = trio.open_memory_channel[MessageAPI[sedes.Serializable]](0)
 
         self.events = Events()
         self.pool = Pool(
@@ -278,12 +279,12 @@ class Client(Service, ClientAPI):
     async def locate(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Locations], ...]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Locate(request_id, key), node)
-        await self._do_request_with_multi_response(message, Locations)
+        return await self._do_request_with_multi_response(message, Locations)
 
     async def retrieve(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Chunk], ...]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Retrieve(request_id, key), node)
-        await self._do_request_with_multi_response(message, Chunk)
+        return await self._do_request_with_multi_response(message, Chunk)
 
     async def _do_request_with_multi_response(self,
                                               request: MessageAPI[sedes.Serializable],
@@ -365,7 +366,7 @@ class Client(Service, ClientAPI):
             await self.manager.wait_finished()
 
     async def _handle_outbound_messages(self,
-                                        receive_channel: trio.abc.ReceiveChannel[MessageAPI],
+                                        receive_channel: trio.abc.ReceiveChannel[MessageAPI[sedes.Serializable]],  # noqa: E501
                                         ) -> None:
         async with trio.open_nursery() as nursery:
             async with receive_channel:
@@ -385,7 +386,8 @@ class Client(Service, ClientAPI):
                 await self._outbound_datagram_send_channel.send(packet.as_datagram())
                 self.logger.debug('packet > %s', packet)
 
-    async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram]):
+    async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram],
+                                        ) -> None:
         async with trio.open_nursery() as nursery:
             async with receive_channel:
                 async for datagram in receive_channel:

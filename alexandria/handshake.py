@@ -1,9 +1,5 @@
 import hashlib
-from typing import (
-    NamedTuple,
-    NewType,
-    Tuple,
-)
+from typing import Tuple
 
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -13,8 +9,9 @@ import coincurve
 
 from eth_keys import keys
 
+from alexandria.abc import SessionKeys
 from alexandria.constants import ID_NONCE_SIGNATURE_PREFIX, HKDF_INFO, AES128_KEY_SIZE
-from alexandria.typing import NodeID, IDNonce
+from alexandria.typing import AES128Key, NodeID, IDNonce
 
 
 def ecdh_agree(private_key: keys.PrivateKey, public_key: keys.PublicKey) -> bytes:
@@ -28,15 +25,6 @@ def ecdh_agree(private_key: keys.PrivateKey, public_key: keys.PublicKey) -> byte
     public_key_coincurve = coincurve.keys.PublicKey(public_key_compressed)
     secret_coincurve = public_key_coincurve.multiply(private_key.to_bytes())
     return bytes(secret_coincurve.format())
-
-
-AES128Key = NewType("AES128Key", bytes)
-
-
-class SessionKeys(NamedTuple):
-    encryption_key: AES128Key
-    decryption_key: AES128Key
-    auth_response_key: AES128Key
 
 
 def hkdf_expand_and_extract(secret: bytes,

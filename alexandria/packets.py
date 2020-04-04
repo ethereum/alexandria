@@ -9,7 +9,7 @@ from eth_utils import ValidationError
 import ssz
 from ssz import sedes
 
-from alexandria.abc import Datagram, Endpoint, MessageAPI, PacketAPI, RegistryAPI, TPacket
+from alexandria.abc import MessageAPI, PacketAPI, RegistryAPI
 from alexandria.constants import (
     AUTH_SCHEME_NAME,
     AUTH_RESPONSE_VERSION,
@@ -81,18 +81,18 @@ class CompleteHandshakePacket(PacketAPI):
         return "CompleteHandshakePacket"
 
     @classmethod
-    def prepare(cls: Type[TPacket],
+    def prepare(cls: Type["CompleteHandshakePacket"],
                 *,
                 tag: Tag,
                 auth_tag: Nonce,
                 id_nonce: IDNonce,
-                message: MessageAPI,
+                message: MessageAPI[sedes.Serializable],
                 initiator_key: AES128Key,
                 id_nonce_signature: bytes,
                 auth_response_key: AES128Key,
                 ephemeral_public_key: keys.PublicKey,
                 public_key: keys.PublicKey,
-                ) -> TPacket:
+                ) -> "CompleteHandshakePacket":
         encrypted_auth_response = compute_encrypted_auth_response(
             auth_response_key=auth_response_key,
             id_nonce_signature=id_nonce_signature,
@@ -132,7 +132,7 @@ class CompleteHandshakePacket(PacketAPI):
         )
 
     def to_wire_bytes(self) -> bytes:
-        return ssz.encode(
+        return bytes(ssz.encode(
             (
                 self.tag,
                 (
@@ -146,10 +146,11 @@ class CompleteHandshakePacket(PacketAPI):
                 self.encrypted_message,
             ),
             sedes=COMPLETE_HANDSHAKE_PACKET_SEDES,
-        )
+        ))
 
     @classmethod
-    def from_wire_bytes(cls: Type[TPacket], data: bytes) -> TPacket:
+    def from_wire_bytes(cls: Type["CompleteHandshakePacket"],
+                        data: bytes) -> "CompleteHandshakePacket":
         tag, header_as_tuple, encrypted_message = ssz.decode(data, COMPLETE_HANDSHAKE_PACKET_SEDES)
         (
             auth_tag,
@@ -231,13 +232,13 @@ class HandshakeResponse(PacketAPI):
         return "HandshakeResponse"
 
     def to_wire_bytes(self) -> bytes:
-        return ssz.encode(
+        return bytes(ssz.encode(
             (self.tag, self.magic, self.token, self.id_nonce, self.public_key.to_compressed_bytes()),  # noqa: E501
             sedes=HANDSHAKE_RESPONSE_SEDES,
-        )
+        ))
 
     @classmethod
-    def from_wire_bytes(cls: Type[TPacket], data: bytes) -> TPacket:
+    def from_wire_bytes(cls: Type["HandshakeResponse"], data: bytes) -> "HandshakeResponse":
         tag, magic, token, id_nonce, public_key_compressed_bytes = ssz.decode(
             data,
             HANDSHAKE_RESPONSE_SEDES,
@@ -283,9 +284,9 @@ class MessagePacket(PacketAPI):
                 *,
                 tag: Tag,
                 auth_tag: Nonce,
-                message: MessageAPI,
+                message: MessageAPI[sedes.Serializable],
                 key: AES128Key,
-                ) -> "AuthTagPacket":
+                ) -> "MessagePacket":
         encrypted_message = compute_encrypted_message(
             key=key,
             auth_tag=auth_tag,
@@ -299,10 +300,10 @@ class MessagePacket(PacketAPI):
         )
 
     def to_wire_bytes(self) -> bytes:
-        return ssz.encode(
+        return bytes(ssz.encode(
             (self.tag, self.auth_tag, self.encrypted_message),
             sedes=MESSAGE_PACKET_SEDES,
-        )
+        ))
 
     def decrypt_payload(self,
                         key: AES128Key,
@@ -317,7 +318,7 @@ class MessagePacket(PacketAPI):
         )
 
     @classmethod
-    def from_wire_bytes(cls: Type[TPacket], data: bytes) -> TPacket:
+    def from_wire_bytes(cls: Type["MessagePacket"], data: bytes) -> "MessagePacket":
         tag, auth_tag, encrypted_message = ssz.decode(data, MESSAGE_PACKET_SEDES)
         return cls(
             tag=tag,
@@ -363,7 +364,7 @@ def _decrypt_payload(key: AES128Key,
 #
 # Packet encoding/decoding
 #
-def encode_packet(packet: PacketAPI):
+def encode_packet(packet: PacketAPI) -> bytes:
     return ALL_BYTES[packet.packet_id] + packet.to_wire_bytes()
 
 
@@ -379,30 +380,16 @@ def decode_packet(data: bytes) -> PacketAPI:
         raise TypeError(f"Unknown packet id: {packet_id}")
 
 
-class NetworkPacket(NamedTuple):
-    packet: PacketAPI
-    endpoint: Endpoint
-
-    def __str__(self) -> str:
-        return f"{self.packet} -> {self.endpoint}"
-
-    def as_datagram(self) -> Datagram:
-        return Datagram(
-            data=encode_packet(self.packet),
-            endpoint=self.endpoint,
-        )
-
-
 #
 # Packet Data helpers
 #
 def compute_encrypted_auth_response(auth_response_key: AES128Key,
                                     id_nonce_signature: bytes,
                                     ) -> bytes:
-    plain_text_auth_response = ssz.encode(
+    plain_text_auth_response = bytes(ssz.encode(
         (AUTH_RESPONSE_VERSION, id_nonce_signature),
         sedes=AUTH_RESPONSE_SEDES,
-    )
+    ))
 
     encrypted_auth_response = aesgcm_encrypt(
         key=auth_response_key,
@@ -415,7 +402,7 @@ def compute_encrypted_auth_response(auth_response_key: AES128Key,
 
 def compute_encrypted_message(key: AES128Key,
                               auth_tag: Nonce,
-                              message: MessageAPI,
+                              message: MessageAPI[sedes.Serializable],
                               authenticated_data: bytes,
                               ) -> bytes:
     encrypted_message = aesgcm_encrypt(

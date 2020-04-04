@@ -1,38 +1,34 @@
 import logging
-from typing import Mapping
-
-import trio
+from typing import Dict
 
 from eth_keys import keys
+from ssz import sedes
+import trio
 
 from alexandria._utils import humanize_node_id, public_key_to_node_id
 from alexandria.abc import (
-    Endpoint,
     EventsAPI,
     MessageAPI,
+    NetworkPacket,
     Node,
     PoolAPI,
     SessionAPI,
 )
 from alexandria.exceptions import SessionNotFound, DuplicateSession
-from alexandria.packets import NetworkPacket
 from alexandria.session import SessionInitiator, SessionRecipient
 from alexandria.typing import NodeID
-
-
-DEFAULT_LISTEN_ON = Endpoint('0.0.0.0', 8628)
 
 
 class Pool(PoolAPI):
     logger = logging.getLogger('alexandria.pool.Pool')
 
-    _sessions: Mapping[NodeID, SessionAPI]
+    _sessions: Dict[NodeID, SessionAPI]
 
     def __init__(self,
                  private_key: keys.PrivateKey,
                  events: EventsAPI,
                  outbound_packet_send_channel: trio.abc.SendChannel[NetworkPacket],
-                 inbound_message_send_channel: trio.abc.SendChannel[MessageAPI],
+                 inbound_message_send_channel: trio.abc.SendChannel[MessageAPI[sedes.Serializable]],
                  ) -> None:
         self._private_key = private_key
         self.public_key = private_key.public_key
@@ -59,21 +55,22 @@ class Pool(PoolAPI):
                 f"Session already present for {humanize_node_id(remote_node.node_id)}"
             )
 
+        session: SessionAPI
         if is_initiator:
             session = SessionInitiator(
                 private_key=self._private_key,
                 remote_node=remote_node,
                 events=self._events,
-                outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),
-                inbound_message_send_channel=self._inbound_message_send_channel.clone(),
+                outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),  # type: ignore  # noqa: E501
+                inbound_message_send_channel=self._inbound_message_send_channel.clone(),  # type: ignore  # noqa: E501
             )
         else:
             session = SessionRecipient(
                 private_key=self._private_key,
                 remote_node=remote_node,
                 events=self._events,
-                outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),
-                inbound_message_send_channel=self._inbound_message_send_channel.clone(),
+                outbound_packet_send_channel=self._outbound_packet_send_channel.clone(),  # type: ignore  # noqa: E501
+                inbound_message_send_channel=self._inbound_message_send_channel.clone(),  # type: ignore  # noqa: E501
             )
 
         self._sessions[remote_node.node_id] = session

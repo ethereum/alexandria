@@ -1,11 +1,11 @@
 import logging
-from typing import AsyncIterable, Awaitable, Callable, Optional, Set, Type
+from typing import Any, AsyncIterable, Awaitable, Callable, Generator, Optional, Set, Type
 from types import TracebackType
 
 import trio
 
+from alexandria.abc import Endpoint, SessionAPI  # noqa: F401
 from alexandria.abc import (
-    SessionAPI,
     EventAPI,
     EventsAPI,
     EventSubscriptionAPI,
@@ -15,7 +15,7 @@ from alexandria.abc import (
 
 
 class ReAwaitable(Awaitable[TAwaitable]):
-    _result: TAwaitable
+    _result: Generator[Any, None, TAwaitable]
 
     def __init__(self, awaitable: Awaitable[TAwaitable]) -> None:
         self._awaitable = awaitable
@@ -24,7 +24,7 @@ class ReAwaitable(Awaitable[TAwaitable]):
     def is_done(self) -> bool:
         return hasattr(self, '_result')
 
-    def __await__(self) -> TAwaitable:
+    def __await__(self) -> Generator[Any, None, TAwaitable]:
         if not self.is_done:
             self._result = self._awaitable.__await__()
         return self._result
@@ -40,7 +40,7 @@ class EventSubscription(EventSubscriptionAPI[TAwaitable]):
         self._remove_fn = remove_fn
         self._receive_channel = receive_channel
 
-    def __await__(self) -> TAwaitable:
+    def __await__(self) -> Generator[Any, None, TAwaitable]:
         return self.receive().__await__()
 
     async def __aiter__(self) -> AsyncIterable[TAwaitable]:
@@ -55,7 +55,7 @@ class EventSubscription(EventSubscriptionAPI[TAwaitable]):
             async for payload in self._receive_channel:
                 yield payload
 
-    async def __aenter__(self) -> Awaitable[TAwaitable]:
+    async def __aenter__(self) -> EventSubscriptionAPI[TAwaitable]:
         await trio.hazmat.checkpoint()
         return self
 
@@ -86,7 +86,7 @@ class Event(EventAPI[TEventPayload]):
         self.logger.debug('Finished triggering event: %s', self.name)
 
     def subscribe(self) -> EventSubscriptionAPI[TEventPayload]:
-        send_channel, receive_channel = trio.open_memory_channel[SessionAPI](256)
+        send_channel, receive_channel = trio.open_memory_channel[TEventPayload](256)
 
         self._channels.add(send_channel)
 

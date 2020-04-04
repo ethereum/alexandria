@@ -2,6 +2,7 @@ import collections
 import ipaddress
 import secrets
 import socket
+from typing import Deque
 
 from eth_keys import keys
 
@@ -24,7 +25,7 @@ def _mk_private_key_bytes() -> bytes:
     return secrets.token_bytes(KEY_BYTE_SIZE)
 
 
-class PrivateKeyFactory(factory.Factory):
+class PrivateKeyFactory(factory.Factory):  # type: ignore
     class Meta:
         model = keys.PrivateKey
 
@@ -32,17 +33,17 @@ class PrivateKeyFactory(factory.Factory):
 
 
 def _mk_public_key_bytes() -> bytes:
-    return PrivateKeyFactory().public_key.to_bytes()
+    return bytes(PrivateKeyFactory().public_key.to_bytes())
 
 
-class PublicKeyFactory(factory.Factory):
+class PublicKeyFactory(factory.Factory):  # type: ignore
     class Meta:
         model = keys.PublicKey
 
     public_key_bytes = factory.LazyFunction(_mk_public_key_bytes)
 
 
-PORT_CACHE = collections.deque()
+PORT_CACHE: Deque[int] = collections.deque()
 PORT_CACHE_SIZE = 256
 
 
@@ -67,10 +68,10 @@ def _get_open_port() -> int:
     s.listen(1)
     port = s.getsockname()[1]
     s.close()
-    return port
+    return int(port)
 
 
-class EndpointFactory(factory.Factory):
+class EndpointFactory(factory.Factory):  # type: ignore
     class Meta:
         model = Endpoint
 
@@ -78,7 +79,7 @@ class EndpointFactory(factory.Factory):
     port = factory.LazyFunction(get_open_port)
 
 
-class NodeFactory(factory.Factory):
+class NodeFactory(factory.Factory):  # type: ignore
     class Meta:
         model = Node
 
@@ -86,7 +87,7 @@ class NodeFactory(factory.Factory):
     endpoint = factory.SubFactory(EndpointFactory)
 
 
-class ClientFactory(factory.Factory):
+class ClientFactory(factory.Factory):  # type: ignore
     class Meta:
         model = Client
 
@@ -94,7 +95,7 @@ class ClientFactory(factory.Factory):
     listen_on = factory.SubFactory(EndpointFactory)
 
 
-class ApplicationFactory(factory.Factory):
+class ApplicationFactory(factory.Factory):  # type: ignore
     class Meta:
         model = Application
 

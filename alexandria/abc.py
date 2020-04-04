@@ -22,7 +22,7 @@ from async_service import ServiceAPI
 from eth_keys import keys
 
 from alexandria.payloads import Ack, Chunk, FoundNodes, Locations, Pong
-from alexandria.typing import NodeID, Tag
+from alexandria.typing import AES128Key, NodeID, Tag
 
 
 class PacketAPI(ABC):
@@ -90,6 +90,18 @@ class RegistryAPI(ABC):
     def register(self, message_id: int, payload_type: Type[sedes.Serializable]) -> None:
         ...
 
+    @abstractmethod
+    def get_sedes(self, message_id: int) -> sedes.Serializable:
+        ...
+
+    @abstractmethod
+    def get_message_id(self, payload_type: Type[TPayload]) -> int:
+        ...
+
+    @abstractmethod
+    def decode_payload(self, data: bytes) -> sedes.Serializable:
+        ...
+
 
 class MessageAPI(Generic[TPayload]):
     message_id: int
@@ -101,10 +113,33 @@ class MessageAPI(Generic[TPayload]):
         ...
 
 
+class SessionKeys(NamedTuple):
+    encryption_key: AES128Key
+    decryption_key: AES128Key
+    auth_response_key: AES128Key
+
+
+class NetworkPacket(NamedTuple):
+    packet: PacketAPI
+    endpoint: Endpoint
+
+    def __str__(self) -> str:
+        return f"{self.packet} -> {self.endpoint}"
+
+    def as_datagram(self) -> Datagram:
+        from alexandria.packets import encode_packet
+        return Datagram(
+            data=encode_packet(self.packet),
+            endpoint=self.endpoint,
+        )
+
+
 class SessionAPI(ABC):
     remote_node: Node
     remote_node_id: NodeID
     remote_endpoint: Endpoint
+
+    is_initiator: bool
 
     @abstractmethod
     def __init__(self,
@@ -118,11 +153,11 @@ class SessionAPI(ABC):
         ...
 
     @abstractmethod
-    async def handle_inbound_packet(self, packet: PacketAPI) -> Optional[PacketAPI]:
+    async def handle_inbound_packet(self, packet: PacketAPI) -> None:
         ...
 
     @abstractmethod
-    async def handle_outbound_packet(self, packet: PacketAPI) -> PacketAPI:
+    async def handle_outbound_packet(self, packet: PacketAPI) -> None:
         ...
 
     @property
@@ -169,7 +204,7 @@ class PoolAPI(ABC):
         ...
 
     @abstractmethod
-    def create_session(self, remote_node_id: NodeID, remote_endpoint: Endpoint) -> SessionAPI:
+    def create_session(self, remote_node: Node, is_initiator: bool) -> SessionAPI:
         ...
 
 
@@ -182,15 +217,22 @@ class SubscriptionAPI(ContextManager['SubscriptionAPI["TItem"]'], Awaitable[TIte
         ...
 
     @abstractmethod
-    async def stream(self) -> AsyncIterable[TItem]:
+    def stream(self) -> AsyncIterable[TItem]:
         ...
 
 
 TAwaitable = TypeVar('TAwaitable')
 
 
-class EventSubscriptionAPI(Awaitable[TAwaitable], AsyncContextManager[Awaitable[TAwaitable]]):
-    pass
+class EventSubscriptionAPI(Awaitable[TAwaitable],
+                           AsyncContextManager['EventSubscriptionAPI[TAwaitable]']):
+    @abstractmethod
+    async def receive(self) -> TAwaitable:
+        ...
+
+    @abstractmethod
+    def stream(self) -> AsyncIterable[TAwaitable]:
+        ...
 
 
 TEventPayload = TypeVar('TEventPayload')
@@ -318,7 +360,7 @@ class ClientAPI(ServiceAPI):
         ...
 
     @abstractmethod
-    async def find_nodes(self, node: Node, distance: int) -> Tuple[MessageAPI[FoundNodes], ...]:
+    async def find_nodes(self, node: Node, *, distance: int) -> Tuple[MessageAPI[FoundNodes], ...]:
         ...
 
     @abstractmethod
@@ -343,6 +385,9 @@ class RoutingTableStats(NamedTuple):
 
 
 class RoutingTableAPI(Collection[NodeID]):
+    bucket_size: int
+    center_node_id: NodeID
+
     @abstractmethod
     def get_stats(self) -> RoutingTableStats:
         ...

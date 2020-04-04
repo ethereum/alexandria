@@ -1,5 +1,4 @@
 import enum
-import hashlib
 import logging
 import secrets
 from typing import Tuple
@@ -9,14 +8,21 @@ from eth_utils import encode_hex, ValidationError
 from ssz import sedes
 import trio
 
-from alexandria._utils import humanize_node_id
-from alexandria.abc import EventsAPI, MessageAPI, Node, PacketAPI, SessionAPI
+from alexandria._utils import humanize_node_id, public_key_to_node_id
+from alexandria.abc import (
+    EventsAPI,
+    MessageAPI,
+    NetworkPacket,
+    Node,
+    PacketAPI,
+    SessionAPI,
+    SessionKeys,
+)
 from alexandria.exceptions import HandshakeFailure, DecryptionError
 from alexandria.handshake import (
     compute_session_keys,
     create_id_nonce_signature,
     create_id_nonce_signature_input,
-    SessionKeys,
 )
 from alexandria.messages import Message
 from alexandria.packets import (
@@ -27,7 +33,6 @@ from alexandria.packets import (
     get_random_id_nonce,
     HandshakeResponse,
     MessagePacket,
-    NetworkPacket,
 )
 from alexandria.tags import compute_tag, recover_source_id_from_tag
 from alexandria.typing import NodeID, Tag, AES128Key, IDNonce
@@ -42,11 +47,13 @@ class SessionStatus(enum.Enum):
 class BaseSession(SessionAPI):
     logger = logging.getLogger('alexandria.session.Session')
 
+    _session_keys: SessionKeys
+
     def __init__(self,
                  private_key: keys.PrivateKey,
                  remote_node: Node,
                  events: EventsAPI,
-                 outbound_packet_send_channel: trio.abc.SendChannel[PacketAPI],
+                 outbound_packet_send_channel: trio.abc.SendChannel[NetworkPacket],
                  inbound_message_send_channel: trio.abc.SendChannel[MessageAPI[sedes.Serializable]],
                  ) -> None:
         self._private_key = private_key
@@ -57,7 +64,7 @@ class BaseSession(SessionAPI):
 
         self._events = events
 
-        self._outbound_message_buffer_channels = trio.open_memory_channel[MessageAPI](256)
+        self._outbound_message_buffer_channels = trio.open_memory_channel[MessageAPI[sedes.Serializable]](256)  # noqa: E501
         self._inbound_packet_buffer_channels = trio.open_memory_channel[PacketAPI](256)
 
         # TODO
@@ -97,10 +104,7 @@ class BaseSession(SessionAPI):
 
     @property
     def local_node_id(self) -> NodeID:
-        return int.from_bytes(
-            hashlib.sha256(self.private_key.public_key.to_bytes()).digest(),
-            'big',
-        )
+        return public_key_to_node_id(self.private_key.public_key)
 
     @property
     def tag(self) -> Tag:
@@ -135,7 +139,7 @@ class SessionInitiator(BaseSession):
     #
     # Message API
     #
-    async def handle_outbound_message(self, message: MessageAPI) -> None:
+    async def handle_outbound_message(self, message: MessageAPI[sedes.Serializable]) -> None:
         if self.is_handshake_complete:
             self.logger.debug("%s: sending message: %s", self, message)
             packet = MessagePacket.prepare(
@@ -294,7 +298,7 @@ class SessionRecipient(BaseSession):
     #
     # Message API
     #
-    async def handle_outbound_message(self, message: MessageAPI) -> None:
+    async def handle_outbound_message(self, message: MessageAPI[sedes.Serializable]) -> None:
         if self.is_handshake_complete:
             self.logger.debug("%s: sending message: %s", self, message)
             packet = MessagePacket.prepare(
@@ -354,11 +358,15 @@ class SessionRecipient(BaseSession):
                 await self.send_handshake_response(packet)
             else:
                 # TODO: full buffer handling
-                self._inbound_packet_buffer_channels.send_nowait(packet)
+                # TODO: manage buffer...
+                self._inbound_packet_buffer_channels[0].send_nowait(packet)
         elif self.is_during_handshake:
-            self._session_keys = await self.receive_handshake_completion(packet)
-            self._status = SessionStatus.AFTER
-            await self._events.handshake_complete.trigger(self)
+            if isinstance(packet, CompleteHandshakePacket):
+                self._session_keys = await self.receive_handshake_completion(packet)
+                self._status = SessionStatus.AFTER
+                await self._events.handshake_complete.trigger(self)
+            else:
+                self._inbound_packet_buffer_channels[0].send_nowait(packet)
         else:
             raise Exception("Invalid state")
 
@@ -391,7 +399,7 @@ class SessionRecipient(BaseSession):
             endpoint=self.remote_endpoint,
         ))
 
-    async def receive_handshake_completion(self, packet: CompleteHandshakePacket) -> None:
+    async def receive_handshake_completion(self, packet: CompleteHandshakePacket) -> SessionKeys:
         self.logger.debug('%s: received handshake completion', self)
         remote_node_id = recover_source_id_from_tag(
             packet.tag,
@@ -432,7 +440,7 @@ class SessionRecipient(BaseSession):
     def decrypt_and_validate_message(self,
                                      complete_handshake_packet: CompleteHandshakePacket,
                                      decryption_key: AES128Key
-                                     ) -> MessageAPI:
+                                     ) -> sedes.Serializable:
         try:
             return complete_handshake_packet.decrypt_payload(decryption_key)
         except DecryptionError as error:

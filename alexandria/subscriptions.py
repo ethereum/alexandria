@@ -2,9 +2,7 @@ from typing import (
     Any,
     AsyncIterable,
     Callable,
-    ContextManager,
     Generator,
-    Generic,
     Optional,
     Type,
 )
@@ -12,10 +10,10 @@ from types import TracebackType
 
 import trio
 
-from alexandria.abc import TItem
+from alexandria.abc import TItem, SubscriptionAPI
 
 
-class Subscription(ContextManager['Subscription[TItem]'], Generic[TItem]):
+class Subscription(SubscriptionAPI[TItem]):
     def __init__(self,
                  remove_fn: Callable[[], None],
                  receive_channel: trio.abc.ReceiveChannel[TItem],

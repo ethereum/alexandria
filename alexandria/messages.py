@@ -26,8 +26,8 @@ class Message(MessageAPI[TPayload]):
     def __str__(self) -> str:
         return f"Message[{self.payload} -> {self.node}]"
 
-    def to_bytes(self) -> None:
-        return ALL_BYTES[self.message_id] + ssz.encode(self.payload)
+    def to_bytes(self) -> bytes:
+        return ALL_BYTES[self.message_id] + bytes(ssz.encode(self.payload))
 
 
 #

@@ -13,19 +13,26 @@ from ssz import sedes
 
 import trio
 
-from alexandria.abc import MessageAPI, NodeID, RegistryAPI, SubscriptionAPI, TPayload
+from alexandria.abc import (
+    MessageAPI,
+    MessageDispatcherAPI,
+    NodeID,
+    RegistryAPI,
+    SubscriptionAPI,
+    TPayload,
+)
 from alexandria.messages import default_registry
 from alexandria.subscriptions import Subscription
 
 
-def get_random_request_id():
+def get_random_request_id() -> int:
     return secrets.randbits(16)
 
 
 MAX_REQUEST_ID_ATTEMPTS = 3
 
 
-class MessageDispatcher(Service):
+class MessageDispatcher(Service, MessageDispatcherAPI):
     logger = logging.getLogger('alexandria.subscriptions.SubscriptionManager')
 
     _subscriptions: DefaultDict[int, Set[trio.abc.SendChannel[MessageAPI[sedes.Serializable]]]]
@@ -78,7 +85,7 @@ class MessageDispatcher(Service):
         else:
             # this should be extremely unlikely to happen
             raise ValueError(
-                f"Failed to get free request id ({len(self.response_handler_send_channels)} "
+                f"Failed to get free request id ({len(self._reserved_request_ids)} "
                 f"handlers added right now)"
             )
 

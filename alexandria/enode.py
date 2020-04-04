@@ -15,7 +15,7 @@ from eth_keys import (
 )
 
 from alexandria._utils import public_key_to_node_id, humanize_node_id
-from alexandria.abc import Endpoint
+from alexandria.abc import Endpoint, Node
 
 
 def validate_enode_uri(enode: str, require_ip: bool = False) -> None:
@@ -49,7 +49,7 @@ def validate_enode_uri(enode: str, require_ip: bool = False) -> None:
         raise ValidationError(str(e))
 
 
-TENode = TypeVar('TENode')
+TENode = TypeVar('TENode', bound='ENode')
 
 
 class ENode:
@@ -61,7 +61,8 @@ class ENode:
                  endpoint: Endpoint) -> None:
         self.public_key = public_key
         self.endpoint = endpoint
-        self.node_id = public_key_to_node_id(self.public_key_to_node_id)
+        self.node_id = public_key_to_node_id(self.public_key)
+        self.node = Node(self.node_id, self.endpoint)
 
     def __str__(self) -> str:
         node_id_display = humanize_node_id(public_key_to_node_id(self.public_key))
@@ -78,6 +79,10 @@ class ENode:
     def from_enode_uri(cls: Type[TENode], uri: str) -> TENode:
         validate_enode_uri(uri)  # Be no more permissive than the validation
         parsed = urlparse.urlparse(uri)
+        if parsed.username is None:
+            raise Exception("Unreachable code path")
         pubkey = keys.PublicKey(decode_hex(parsed.username))
-        endpoint = Endpoint(parsed.hostname, parsed.port)
+        if parsed.port is None:
+            raise Exception("Unreachable code path")
+        endpoint = Endpoint(ipaddress.IPv4Address(parsed.hostname), parsed.port)
         return cls(pubkey, endpoint)

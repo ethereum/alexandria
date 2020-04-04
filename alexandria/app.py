@@ -1,5 +1,5 @@
 import logging
-from typing import Collection
+from typing import Collection, Dict
 
 from async_service import Service
 from eth_keys import keys
@@ -21,6 +21,7 @@ class Application(Service):
     logger = logging.getLogger('alexandria.app.Application')
 
     client: ClientAPI
+    content_db: Dict[bytes, bytes]
     endpoint_db: EndpointDatabaseAPI
     routing_table: RoutingTableAPI
 
@@ -72,7 +73,8 @@ class Application(Service):
         table as well as the endpoint database.
         """
         async with self.client.events.handshake_complete.subscribe() as subscription:
-            async for session in subscription:
+            while self.manager.is_running:
+                session = await subscription.receive()
                 self.logger.debug(
                     'recording node and endpoint: %s@%s',
                     humanize_node_id(session.remote_node_id),

@@ -10,7 +10,8 @@ ALEXANDRIA_HEADER = "\n".join((
 ))
 
 
-async def main():
+async def main() -> None:
+    import ipaddress
     import logging
     import os
     import secrets
@@ -21,18 +22,18 @@ async def main():
     from alexandria.abc import Endpoint
     from alexandria.application import Application
     from alexandria.cli_parser import parser
-    from alexandria.enode import Node
+    from alexandria.enode import ENode
     from alexandria.logging import setup_logging
 
     from eth_keys import keys
 
-    DEFAULT_LISTEN_ON = Endpoint('0.0.0.0', 8628)
+    DEFAULT_LISTEN_ON = Endpoint(ipaddress.IPv4Address('0.0.0.0'), 8628)
 
     args = parser.parse_args()
     setup_logging(args.log_level)
 
-    if args.port is None:
-        listen_on = Endpoint('0.0.0.0', args.port)
+    if args.port is not None:
+        listen_on = Endpoint(ipaddress.IPv4Address('0.0.0.0'), args.port)
     else:
         listen_on = DEFAULT_LISTEN_ON
 
@@ -45,7 +46,7 @@ async def main():
 
     bootnodes_raw = args.bootnodes or ()
     bootnodes = tuple(
-        Node.from_enode_uri(enode) for enode in bootnodes_raw
+        ENode.from_enode_uri(enode).node for enode in bootnodes_raw
     )
 
     application = Application(
