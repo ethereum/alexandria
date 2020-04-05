@@ -3,6 +3,7 @@ import random
 
 from async_service import background_trio_service
 from async_exit_stack import AsyncExitStack
+from eth_utils import to_dict
 import pytest
 import trio
 
@@ -25,7 +26,16 @@ async def bootnode():
             yield bootnode
 
 
-@pytest.mark.skip('integration testing')
+@to_dict
+def make_content_db():
+    for _ in range(1024):
+        content_id = random.randint(0, 65535)
+        key = b'key-%d' % content_id
+        value = b'value-%d' % content_id
+        yield key, value
+
+
+#@pytest.mark.skip('integration testing')
 @pytest.mark.trio
 async def test_application(bootnode):
     bootnodes = (Node(bootnode.client.local_node_id, bootnode.client.listen_on),)
@@ -40,13 +50,17 @@ async def test_application(bootnode):
                 connected_nodes.append(session.remote_node_id)
 
     config = KademliaConfig(
-        LOOKUP_INTERVAL=10,
+        # LOOKUP_INTERVAL=10,
         ANNOUNCE_INTERVAL=30,
+        ANNOUNCE_CONCURRENCY=1,
     )
     async with AsyncExitStack() as stack:
         for i in range(12):
+            # small delay between starting each client
             await trio.sleep(random.random())
-            app = ApplicationFactory(bootnodes=bootnodes, config=config)
+            # content database
+            content_db = make_content_db()
+            app = ApplicationFactory(bootnodes=bootnodes, content_db=content_db, config=config)
             logger.info('CLIENT-%d: %s', i, humanize_node_id(app.client.local_node_id))
             await stack.enter_async_context(background_trio_service(app))
         await trio.sleep_forever()

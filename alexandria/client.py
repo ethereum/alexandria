@@ -107,7 +107,7 @@ class Client(Service, ClientAPI):
             Ping(request_id),
             node,
         )
-        self.logger.info("Sending %s", message)
+        self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
         return request_id
 
@@ -116,7 +116,7 @@ class Client(Service, ClientAPI):
             Pong(request_id),
             node,
         )
-        self.logger.info("Sending %s", message)
+        self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
 
     async def send_find_nodes(self, node: Node, *, distance: int) -> int:
@@ -125,7 +125,7 @@ class Client(Service, ClientAPI):
             FindNodes(request_id, distance),
             node,
         )
-        self.logger.info("Sending %s", message)
+        self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
         return request_id
 
@@ -135,12 +135,12 @@ class Client(Service, ClientAPI):
                                request_id: int,
                                found_nodes: Collection[Node]) -> int:
         batches = tuple(partition_all(NODES_PER_PAYLOAD, found_nodes))
-        self.logger.info("Sending FoundNodes with %d nodes to %s", len(found_nodes), node)
+        self.logger.debug("Sending FoundNodes with %d nodes to %s", len(found_nodes), node)
         if batches:
             total_batches = len(batches)
             for batch in batches:
                 payload = tuple(
-                    (node.node_id, node.endpoint.ip_address.packed, node.endpoint.port)
+                    node.to_payload()
                     for node in batch
                 )
                 response = Message(
@@ -162,12 +162,11 @@ class Client(Service, ClientAPI):
     #
     async def send_advertise(self, node: Node, *, key: bytes, who: Node) -> int:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
-        node_payload = (who.node_id, who.endpoint.ip_address.packed, who.endpoint.port)
         message = Message(
-            Advertise(request_id, key, node_payload),
+            Advertise(request_id, key, who.to_payload()),
             node,
         )
-        self.logger.info("Sending %s", message)
+        self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
         return request_id
 
@@ -176,7 +175,7 @@ class Client(Service, ClientAPI):
             Ack(request_id),
             node,
         )
-        self.logger.info("Sending %s", message)
+        self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
 
     async def send_locate(self, node: Node, *, key: bytes) -> int:
@@ -185,7 +184,7 @@ class Client(Service, ClientAPI):
             Locate(request_id, key),
             node,
         )
-        self.logger.info("Sending %s", message)
+        self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
         return request_id
 
@@ -195,12 +194,12 @@ class Client(Service, ClientAPI):
                              request_id: int,
                              locations: Collection[Node]) -> int:
         batches = tuple(partition_all(NODES_PER_PAYLOAD, locations))
-        self.logger.info("Sending Locations with %d nodes to %s", len(locations), node)
+        self.logger.debug("Sending Locations with %d nodes to %s", len(locations), node)
         if batches:
             total_batches = len(batches)
             for batch in batches:
                 payload = tuple(
-                    (node.node_id, node.endpoint.ip_address.packed, node.endpoint.port)
+                    node.to_payload()
                     for node in batch
                 )
                 response = Message(
@@ -226,7 +225,7 @@ class Client(Service, ClientAPI):
             Retrieve(request_id, key),
             node,
         )
-        self.logger.info("Sending %s", message)
+        self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
         return request_id
 
@@ -271,8 +270,7 @@ class Client(Service, ClientAPI):
 
     async def advertise(self, node: Node, *, key: bytes, who: Node) -> MessageAPI[Ack]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
-        node_payload = (who.node_id, who.endpoint.ip_address.packed, who.endpoint.port)
-        message = Message(Advertise(request_id, key, node_payload), node)
+        message = Message(Advertise(request_id, key, who.to_payload()), node)
         with self.message_dispatcher.subscribe_request(message, Ack) as subscription:
             return await subscription.receive()
 
@@ -284,7 +282,8 @@ class Client(Service, ClientAPI):
     async def retrieve(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Chunk], ...]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Retrieve(request_id, key), node)
-        return await self._do_request_with_multi_response(message, Chunk)
+        responses = await self._do_request_with_multi_response(message, Chunk)
+        return tuple(sorted(responses, key=lambda response: response.payload.index))
 
     async def _do_request_with_multi_response(self,
                                               request: MessageAPI[sedes.Serializable],

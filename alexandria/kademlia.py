@@ -1,10 +1,12 @@
 import collections
+import functools
 import logging
 import secrets
 from typing import DefaultDict, Iterable, Mapping, NamedTuple, Set, Tuple
 
 from async_service import Service
 from eth_utils import to_tuple
+from eth_utils.toolz import partition_all
 import trio
 
 from alexandria._utils import every, humanize_node_id, content_key_to_node_id
@@ -23,6 +25,7 @@ from alexandria.typing import NodeID
 KADEMLIA_PING_INTERVAL = 30  # interval of outgoing pings sent to maintain the routing table
 KADEMLIA_LOOKUP_INTERVAL = 60  # intervals between lookups
 KADEMLIA_ANNOUNCE_INTERVAL = 600  # 10 minutes
+KADEMLIA_ANNOUNCE_CONCURRENCY = 3
 
 
 NodePayload = Tuple[NodeID, bytes, int]
@@ -36,6 +39,7 @@ class KademliaConfig(NamedTuple):
     LOOKUP_INTERVAL: int = KADEMLIA_LOOKUP_INTERVAL
     PING_INTERVAL: int = KADEMLIA_PING_INTERVAL
     ANNOUNCE_INTERVAL: int = KADEMLIA_ANNOUNCE_INTERVAL
+    ANNOUNCE_CONCURRENCY: int = KADEMLIA_ANNOUNCE_CONCURRENCY
 
 
 class Kademlia(Service):
@@ -60,6 +64,10 @@ class Kademlia(Service):
         if config is None:
             config = KademliaConfig()
         self.config = config
+
+        # populate the index
+        for key in self.content_db:
+            self.content_index[key].add(self.client.local_node_id)
 
     async def run(self) -> None:
         self.manager.run_daemon_task(self._periodic_report_routing_table_status)
@@ -88,7 +96,7 @@ class Kademlia(Service):
             self.logger.info(
                 (
                     "\n"
-                    "####################################################\n"
+                    "###################[%s]#####################\n"
                     "       RoutingTable(bucket_size=%d, num_buckets=%d):\n"
                     "         - %d nodes\n"
                     "         - full buckets: %s\n"
@@ -98,6 +106,7 @@ class Kademlia(Service):
                     "         - index: %d\n"
                     "####################################################"
                 ),
+                humanize_node_id(self.client.local_node_id),
                 stats.bucket_size,
                 stats.num_buckets,
                 stats.total_nodes,
@@ -200,13 +209,27 @@ class Kademlia(Service):
                 await self.client.send_pong(request.node, request_id=request.payload.request_id)
 
     async def _periodically_announce_content(self) -> None:
-        async for _ in every(self.config.ANNOUNCE_INTERVAL):  # noqa: F841
-            for key, value in tuple(self.content_db.items()):
-                content_node_id = content_key_to_node_id(key)
-                for node_id in self.routing_table.iter_nodes_around(content_node_id):
-                    endpoint = self.endpoint_db.get_endpoint(node_id)
-                    node = Node(node_id, endpoint)
-                    await self.client.send_advertise(node, key=key, who=self.client.local_node)
+        async with trio.open_nursery() as nursery:
+            limiter = trio.CapacityLimiter(self.config.ANNOUNCE_CONCURRENCY)
+
+            async def do_announce(node: Node, key: bytes, who: Node) -> None:
+                async with limiter:
+                    await self.client.send_advertise(node, key=key, who=who)
+
+            async for _ in every(self.config.ANNOUNCE_INTERVAL):  # noqa: F841
+                for key, value in tuple(self.content_db.items()):
+                    content_node_id = content_key_to_node_id(key)
+                    nodes_around = self.routing_table.iter_nodes_around(content_node_id)
+                    for batch in partition_all(self.config.ANNOUNCE_CONCURRENCY, nodes_around):
+                        for node_id in batch:
+                            endpoint = self.endpoint_db.get_endpoint(node_id)
+                            node = Node(node_id, endpoint)
+                            nursery.start_soon(
+                                do_announce,
+                                node,
+                                key,
+                                self.client.local_node,
+                            )
 
     async def _handle_advertise_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Advertise) as subscription:

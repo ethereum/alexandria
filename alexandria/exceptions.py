@@ -16,3 +16,7 @@ class SessionNotFound(AlexandriaError):
 
 class DuplicateSession(AlexandriaError):
     pass
+
+
+class ContentNotFound(AlexandriaError):
+    pass

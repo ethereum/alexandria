@@ -58,6 +58,21 @@ class Node(NamedTuple):
         from alexandria._utils import humanize_node_id
         return f"{humanize_node_id(self.node_id)}@{self.endpoint}"
 
+    def to_payload(self) -> Tuple[NodeID, bytes, int]:
+        return (
+            self.node_id,
+            self.endpoint.ip_address.packed,
+            self.endpoint.port,
+        )
+
+    @classmethod
+    def from_payload(cls, payload: Tuple[NodeID, bytes, int]) -> 'Node':
+        node_id, ip_address, port = payload
+        return cls(
+            node_id,
+            Endpoint(ipaddress.IPv4Address(ip_address), port),
+        )
+
 
 class EndpointDatabaseAPI:
     @abstractmethod

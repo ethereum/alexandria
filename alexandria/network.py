@@ -1,5 +1,4 @@
 import collections
-import ipaddress
 import itertools
 import logging
 import math
@@ -41,9 +40,9 @@ class Network(NetworkAPI):
     async def single_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
         found_nodes = await self.client.find_nodes(node, distance=distance)
         return tuple(
-            Node(node_id, Endpoint(ipaddress.IPv4Address(ip_address), port))
+            Node.from_payload(node_as_payload)
             for message in found_nodes
-            for node_id, ip_address, port in message.payload.nodes
+            for node_as_payload in message.payload.nodes
         )
 
     async def iterative_lookup(self, target_id: NodeID) -> Tuple[Node, ...]:
@@ -147,6 +146,21 @@ class Network(NetworkAPI):
         await self.client.ping(node)
         self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
         self.routing_table.update(node.node_id)
+
+    async def locate(self, node: Node, *, key: bytes) -> Tuple[Node, ...]:
+        locations = await self.client.locate(node, key=key)
+        return tuple(
+            Node.from_payload(node_payload)
+            for message in locations
+            for node_payload in message.payload.nodes
+        )
+
+    async def retrieve(self, node: Node, *, key: bytes) -> bytes:
+        chunks = await self.client.retrieve(node, key=key)
+        data = b''.join((
+            message.payload.data for message in chunks
+        ))
+        return data
 
     async def bond(self, node: Node) -> None:
         """
