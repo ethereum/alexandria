@@ -6,9 +6,9 @@ from typing import (
     Awaitable,
     Collection,
     ContextManager,
+    FrozenSet,
     Generic,
     Iterator,
-    MutableMapping,
     NamedTuple,
     Optional,
     Sequence,
@@ -456,8 +456,49 @@ class NetworkAPI(ABC):
         ...
 
 
-class ContentDatabaseAPI(MutableMapping[bytes, bytes]):
-    @property
+class ContentBundle(NamedTuple):
+    key: bytes
+    data: Optional[bytes]
+    node_id: NodeID
+
+
+class Location(NamedTuple):
+    content_id: NodeID
+    node_id: NodeID
+
+
+class Content(NamedTuple):
+    key: bytes
+    data: bytes
+
+
+class ContentDatabaseAPI(ABC):
+    capacity: int
+    center_id: NodeID
+
     @abstractmethod
-    def total_size(self) -> int:
+    def get(self, key: bytes) -> None:
+        ...
+        return self._db[key]
+
+    @abstractmethod
+    def set(self, content: Content) -> None:
+        ...
+
+    @abstractmethod
+    def delete(self, key: bytes) -> None:
+        ...
+
+
+class ContentIndexAPI(ABC):
+    @abstractmethod
+    def get_index(self, key: NodeID) -> FrozenSet[NodeID]:
+        ...
+
+    @abstractmethod
+    def add(self, location: Location) -> None:
+        ...
+
+    @abstractmethod
+    def remove(self, location: Location) -> None:
         ...

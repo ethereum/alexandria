@@ -118,4 +118,4 @@ class ApplicationFactory(factory.Factory):  # type: ignore
     private_key = factory.SubFactory(PrivateKeyFactory)
     listen_on = factory.SubFactory(EndpointFactory)
     config = factory.SubFactory(KademliaConfigFactory)
-    content_db = factory.LazyFunction(lambda: {})
+    local_content = factory.LazyFunction(lambda: {})

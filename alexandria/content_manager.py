@@ -1,45 +1,39 @@
 import collections
 import functools
+import logging
 import random
-from typing import Collection, Deque, Dict, Iterator, Mapping, NamedTuple, Optional, Set, Tuple
+from typing import (
+    Collection,
+    Deque,
+    Dict,
+    Iterator,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+)
 
-from eth_utils import to_tuple
+from eth_utils import encode_hex
 from eth_utils.toolz import groupby
 
 from alexandria._utils import content_key_to_node_id
+from alexandria.abc import ContentDatabaseAPI, ContentIndexAPI, Location, ContentBundle, Content
+from alexandria.constants import MEGABYTE
 from alexandria.typing import NodeID
 from alexandria.routing_table import compute_log_distance, compute_distance
 
 
-class ContentBundle(NamedTuple):
-    key: bytes
-    data: Optional[bytes]
-    node_id: NodeID
-
-
-class Location(NamedTuple):
-    key: bytes
-    node_id: NodeID
-
-
-class Record(NamedTuple):
-    key: bytes
-    data: bytes
-
-
 class StorageConfig(NamedTuple):
     # number of bytes
-    ephemeral_storage_size: int
+    ephemeral_storage_size: int = 100 * MEGABYTE
     # number of index entries (fixed size per entry)
-    ephemeral_index_size: int
+    ephemeral_index_size: int = 1000
 
     # number of bytes
-    cache_storage_size: int
+    cache_storage_size: int = 100 * MEGABYTE
     # number of index entries (fixed size per entry)
-    cache_index_size: int
-
-
-MAX_DISTANCE = 2**256 - 1
+    cache_index_size: int = 1000
 
 
 def get_eviction_probability(content_id: NodeID, center_id: NodeID) -> float:
@@ -65,7 +59,7 @@ def iter_furthest_keys(center_id: NodeID, keys: Collection[bytes]) -> Iterator[N
     yield from sorted(keys, key=sort_fn, reverse=True)
 
 
-class EphemeralDB:
+class EphemeralDB(ContentDatabaseAPI):
     _db: Dict[bytes, bytes]
 
     def __init__(self, center_id: NodeID, capacity: int) -> None:
@@ -73,8 +67,7 @@ class EphemeralDB:
         self.center_id = center_id
         self.capacity = capacity
 
-    @to_tuple
-    def enforce_capacity(self) -> Iterator[bytes]:
+    def _enforce_capacity(self) -> None:
         if self.capacity >= 0:
             return
 
@@ -83,7 +76,6 @@ class EphemeralDB:
             evict_probability = get_eviction_probability(self.center_id, content_id)
             should_evict = random.random() < evict_probability
             if should_evict:
-                yield key
                 self.delete(key)
 
                 if self.capacity >= 0:
@@ -92,7 +84,8 @@ class EphemeralDB:
     def get(self, key: bytes) -> None:
         return self._db[key]
 
-    def set(self, key: bytes, data: bytes) -> None:
+    def set(self, content: Content) -> None:
+        key, data = content
         try:
             if self.get(key) == data:
                 return
@@ -103,6 +96,7 @@ class EphemeralDB:
 
         self._db[key] = data
         self.capacity -= len(data)
+        self._enforce_capacity()
 
     def delete(self, key: bytes) -> None:
         data = self._db.pop(key)
@@ -116,83 +110,207 @@ def iter_furthest_content_ids(center_id: NodeID,
     yield from sorted(content_ids, key=sort_fn, reverse=True)
 
 
-class EphemeralIndex:
+class EphemeralIndex(ContentIndexAPI):
     _index: Dict[NodeID, Set[NodeID]]
 
     def __init__(self, center_id: NodeID, capacity: int) -> None:
-        self._index = {}
+        self._indices = {}
         self.center_id = center_id
         self.capacity = capacity
 
-    @to_tuple
-    def enforce_capacity(self) -> Iterator[Location]:
+    def _enforce_capacity(self) -> None:
         if self.capacity >= 0:
             return
 
-        for content_id in iter_furthest_content_ids(self.center_id, self._index.keys()):
+        for content_id in iter_furthest_content_ids(self.center_id, self._indices.keys()):
             evict_probability = get_eviction_probability(self.center_id, content_id)
             should_evict = random.random() < evict_probability
             if should_evict:
-                index = self._index.pop(key)
+                index = self._indices[content_id]
                 for location_id in iter_furthest_content_ids(content_id, index):
                     index.remove(location_id)
-                    yield Location(content_id, location_id)
                     self.capacity += 1
+
+                    if len(index) == 0:
+                        self._indices.pop(content_id)
 
                     if self.capacity >= 0:
                         break
+                if self.capacity >= 0:
+                    break
 
-    def get(self, key: NodeID) -> Set[NodeID]:
-        return self._index(key)
+    def get_index(self, key: NodeID) -> Set[NodeID]:
+        return self._indices(key)
 
     def add(self, location: Location) -> None:
         key, location_id = location
         try:
-            already_indexed = (location_id in self._index[key])
+            already_indexed = (location_id in self._indices[key])
         except KeyError:
-            self._index[key] = set()
+            self._indices[key] = set()
             already_indexed = False
 
         if already_indexed:
             # already indexed so no change
             return
         else:
-            self._index[key].add(location_id)
+            self._indices[key].add(location_id)
             self.capacity -= 1
+            self._enforce_capacity()
 
-    def delete(self, location: Location) -> None:
+    def remove(self, location: Location) -> None:
         key, location_id = location
-        key_index = self._index[key]
-        if location_id in key_index:
-            key_index.remove(location_id)
+        index = self._indices[key]
+        if location_id in index:
+            index.remove(location_id)
             self.capacity += 1
 
 
-class CacheDB:
-    _db: Mapping[bytes, bytes]
+class CacheDB(ContentDatabaseAPI):
+    _records: Deque[Content]
+    _cache_db: Mapping[bytes, bytes]
+    _counter: int
 
     def __init__(self, capacity: int) -> None:
-        self._db = {}
         self.capacity = capacity
+        self._records = collections.deque()
+        self._counter = 0
+        self._last_cached_at = -1
+        self._cache_db = {}
 
-    @to_tuple
-    def enforce_capacity(self) -> Iterator[bytes]:
-        ...
+    @property
+    def cache_db(self) -> Mapping[bytes, bytes]:
+        if self._last_cached_at < self._counter:
+            self._cache_db = {
+                content.key: content.data
+                for content in self.cache_db_records
+            }
+            self._last_cached_at = self._counter
+        return self._cache_db
+
+    def _enforce_capacity(self) -> None:
+        while self.capacity < 0:
+            oldest_content = self._records.pop()
+            self.remove(oldest_content)
+
+    def _touch_record(self, content: Content) -> None:
+        if content == self._records[0]:
+            return
+        self.records.remove(content)
+        self.records.appendleft(content)
+        self._counter += 1
+
+    def _get_record(self, key: bytes) -> Content:
+        for content in self._records:
+            if content.key == key:
+                return content
+        else:
+            raise KeyError(key)
 
     def get(self, key: bytes) -> None:
-        ...
+        content = self._get_record(key)
+        self._touch_record(content)
+        return content.data
 
-    def set(self, key: bytes, data: bytes) -> None:
-        ...
+    def set(self, content: Content) -> None:
+        # re-setting the same value
+        if content in self._records:
+            self._touch_record(content)
+            return
 
-    def delete(self, key: bytes) -> None:
-        ...
+        # if db already has key, clear out existing value
+        try:
+            previous_content = self._get_record(content.key)
+        except KeyError:
+            pass
+        else:
+            self.capacity += len(previous_content.data)
+            self._records.remove(previous_content)
+
+        # set new record
+        self._records.appendleft(content)
+        self._counter += 1
+        self.capacity -= len(content.data)
+        self._enforce_capacity()
+
+    def remove(self, key: bytes) -> None:
+        content = self._get_record(key)
+        self._records.remove(content)
+        self._counter += 1
+        self.capacity += len(content.data)
 
 
-class ContentDB:
+class CacheIndex(ContentIndexAPI):
+    _cache_indices: Mapping[NodeID, Set[NodeID]]
+
+    def __init__(self, capacity: int) -> None:
+        self.capacity = capacity
+        self._records = collections.deque()
+        self._counter = 0
+        self._last_cached_at = -1
+        self._cache_db = {}
+
+    def _enforce_capacity(self) -> None:
+        if self.capacity >= 0:
+            return
+
+        while self.capacity < 0:
+            oldest_record = self._records.pop()
+            self.remove(oldest_record)
+
+    @property
+    def cache_indices(self) -> Mapping[NodeID, Set[NodeID]]:
+        if self._last_cached_at < self._counter:
+            records_by_node_id = groupby(0, self.cache_index_records)
+            self._cache_indices = {
+                node_id: frozenset(record.node_id for record in location_records)
+                for node_id, location_records in records_by_node_id.items()
+            }
+            self._last_cached_at = self._counter
+        return self._cache_indices
+
+    def _get_records(self, content_id: NodeID) -> Tuple[Location]:
+        for location in self._records:
+            if location.content_id == content_id:
+                yield location
+
+    def _touch_record(self, location: Location) -> None:
+        if location == self._records[0]:
+            return
+        self._records.remove(location)
+        self._records.appendleft(location)
+        self._counter += 1
+
+    def get_index(self, content_id: NodeID) -> Tuple[NodeID, ...]:
+        index = self.cache_indices[content_id]
+        for location in self._get_records(content_id):
+            self._touch_record(location)
+        return tuple(sorted(
+            index,
+            key=lambda location_id: compute_distance(self.center_id, location_id),
+        ))
+
+    def add(self, location: Location) -> None:
+        if location in self._records:
+            self._touch_record(location)
+        else:
+            self._records.appendleft(location)
+            self._counter += 1
+            self.capacity -= 1
+        self._enforce_capacity()
+
+    def remove(self, location: Location) -> None:
+        if location in self._records:
+            self._records.remove(location)
+            self._counter += 1
+            self.capacity += 1
+        else:
+            raise KeyError(location)
+
+
+class ContentManager:
     """
-    1. Maintain bounds on db and index sizes
-    2. Maintain separate datastores for Durable/Ephemeral/Cache
+    Wraps separate datastores for Durable/Ephemeral/Cache
         - Durable: externally controlled, read-only
         - Ephemeral: populated purely from data found on network
             - eviction based on proximity metric
@@ -200,32 +318,36 @@ class ContentDB:
             - eviction based on LRU
     3. Expose single API for accessing data and location index
     """
+    logger = logging.getLogger('alexandria.content_manager.ContentManager')
+
+    center_id: NodeID
+
     durable_db: Mapping[bytes, bytes]
     durable_index: Mapping[NodeID, Set[NodeID]]
 
-    ephemeral_index: Dict[NodeID, Set[NodeID]]
-    _ephemeral_index_capacity: int
+    ephemeral_db: EphemeralDB
+    ephemeral_index: EphemeralIndex
 
-    _cache_db: Mapping[bytes, bytes]
-    _cache_index: Mapping[NodeID, Set[NodeID]]
-
-    cache_index_counter: int
-    cache_db_counter: int
-
-    center_id: NodeID
+    cache_db: CacheDB
+    cache_index: CacheIndex
 
     def __init__(self,
                  center_id: NodeID,
                  durable_db: Mapping[bytes, bytes],
-                 config: StorageConfig,
+                 config: StorageConfig = None,
                  ) -> None:
+        if config is None:
+            config = StorageConfig()
         self.config = config
         self.center_id = center_id
 
         # A database not subject to storage limits that will not have data
         # discarded or added to it.
         self.durable_db = durable_db
-        self.durable_index = collections.defaultdict(set)
+        self.durable_index = {
+            content_key_to_node_id(key): frozenset({self.center_id})
+            for key in self.durable_db
+        }
 
         # A database that will be dynamically populated by data we learn about
         # over the network.  Total size is capped.  Eviction of keys is based
@@ -235,76 +357,98 @@ class ContentDB:
             center_id=self.center_id,
             capacity=self.config.ephemeral_storage_size,
         )
-        self.ephemeral_index = collections.defaultdict(set)
-        self._ephemeral_index_capacity = config.ephemeral_index_size
-
-        self._ephemeral_db_capacity = config.ephemeral_storage_size
-        self._cache_db_capacity = config.cache_storage_size
+        self.ephemeral_index = EphemeralIndex(
+            center_id=self.center_id,
+            capacity=self.config.ephemeral_index_size,
+        )
 
         # A database that holds recently seen content and evicts based on an
         # LRU policy.
-        self.cache_db_records: Deque[Record] = collections.deque()
-        self.cache_db_counter = 0
-        self._cache_db = {}
-        self._cache_db_capacity = config.cache_storage_size
-        self._cache_db_at = -1
+        self.cache_db = CacheDB(capacity=self.config.cache_storage_size)
+        self.cache_index = CacheIndex(capacity=self.config.cache_index_size)
 
-        self.cache_index_records: Deque[Location] = collections.deque()
-        self.cache_index_counter = 0
-        self._cache_index = collections.defaultdict(set)
-        self._cache_index_capacity = config.cache_index_size
-        self._cache_index_at = -1
+    def get_content(self, key: bytes) -> bytes:
+        try:
+            return self.durable_db[key]
+        except KeyError:
+            pass
 
-    @property
-    def cache_db(self) -> Mapping[bytes, bytes]:
-        if self._cache_db_at < self.cache_db_counter:
-            self._cache_db = {
-                record.key: record.data
-                for record in self.cache_db_records
-            }
-            self._cache_db_at = self.cache_db_counter
-        return self._cache_db
+        value_from_ephemeral: Optional[bytes]
+        try:
+            value_from_ephemeral = self.ephemeral_db.get(key)
+        except KeyError:
+            value_from_ephemeral = None
 
-    @property
-    def cache_index(self) -> Mapping[bytes, Set[NodeID]]:
-        if self._cache_index_at < self.cache_index_counter:
-            records_by_node_id = groupby(1, self.cache_index_records)
-            self._cache_index = {
-                key: {record.node_id for record in location_records}
-                for key, location_records in records_by_node_id.items()
-            }
-            self._cache_index_at = self.cache_index_counter
-        return self._cache_index
+        value_from_cache: Optional[bytes]
+        try:
+            value_from_cache = self.cache_db.get(key)
+        except KeyError:
+            value_from_cache = None
 
-    def process_content(self, content: ContentBundle) -> None:
-        """
-        """
+        if value_from_cache is None and value_from_ephemeral is None:
+            raise KeyError(key)
+        elif value_from_cache is not None and value_from_ephemeral is not None:
+            if value_from_cache != value_from_ephemeral:
+                self.logger.warning(
+                    "Data mismatch between ephemeral and cache data store for "
+                    "key `%s`: ephemeral=%s  cache=%s",
+                    encode_hex(key),
+                    encode_hex(value_from_ephemeral),
+                    encode_hex(value_from_cache),
+                )
+                self.cache_db.set(key, value_from_ephemeral)
+            return value_from_ephemeral
+        elif value_from_ephemeral is not None:
+            return value_from_ephemeral
+        elif value_from_cache is not None:
+            return value_from_cache
+        else:
+            raise Exception("Unreachable code block")
+
+    def get_index(self, content_id: NodeID) -> Tuple[NodeID]:
+        try:
+            index_from_durable = self.durable_index[content_id]
+        except KeyError:
+            index_from_durable = set()
+
+        try:
+            index_from_ephemeral = self.ephemeral_index.get_index(content_id)
+        except KeyError:
+            index_from_ephemeral = set()
+
+        try:
+            index_from_cache = self.cache_index.get_index(content_id)
+        except KeyError:
+            index_from_cache = set()
+
+        return index_from_durable | index_from_ephemeral | index_from_cache
+
+    def ingest_content(self, content: ContentBundle) -> None:
         if content.data is not None:
-            self.process_content_data(content.key, content.data)
-        self.process_content_index(content.key, content.node_id)
+            self.ingest_content_data(content.key, content.data)
+        content_id = content_key_to_node_id(content.key)
+        self.ingest_content_index(content_id, content.node_id)
 
-    @to_tuple
-    def _ensure_ephemeral_db_within_capacity(self) -> Tuple[bytes, ...]:
-        """
-        Enforces eviction policy for ephemeral database when over capacity.
-        """
-
-    def process_content_data(self, key: bytes, data: bytes) -> None:
+    def ingest_content_data(self, key: bytes, data: bytes) -> None:
         if key in self.durable_db:
+            local_data = self.durable_db[key]
+            if local_data != data:
+                self.logger.warning(
+                    "Encountered data mismatch for key %s: local=%s other=%s",
+                    encode_hex(key),
+                    encode_hex(local_data),
+                    encode_hex(data),
+                )
             # data which is in our durable db should not be placed in either
-            # the ephemeral db or the cache db.
+            # the ephemeral db or the cache db.  We assume that the value from
+            # the durable DB is canonical
             return
 
-        if key not in self.ephemeral_db:
-            self.insert_ephemeral_content(key, data)
-            self._ephemeral_db_capacity -= len(data)
-            self._ensure_ephemeral_db_within_capacity()
+        self.ephemeral_db.set(key, data)
+        self.cache_db.set(key, data)
 
-        cache_record = Record(key, data)
-        if cache_record in self.cache_db_records:
-            self.cache_db_records.remove(cache_record)
-            self.cache_db_records.appendleft(cache_record)
-            self.cache_db_counter += 1
+    def process_content_index(self, content_id: NodeID, location_id: NodeID) -> None:
+        location = Location(content_id, location_id)
 
-    def process_content_index(self, key: bytes, node: NodeID) -> None:
-        ...
+        self.ephemeral_index.add(location)
+        self.cache_index.add(location)

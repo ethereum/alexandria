@@ -18,6 +18,7 @@ from alexandria.abc import (
     RoutingTableAPI,
 )
 from alexandria.constants import PING_TIMEOUT
+from alexandria.content_manager import StorageConfig,
 from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
 from alexandria.typing import NodeID
 
@@ -41,6 +42,8 @@ class KademliaConfig(NamedTuple):
     ANNOUNCE_INTERVAL: int = KADEMLIA_ANNOUNCE_INTERVAL
     ANNOUNCE_CONCURRENCY: int = KADEMLIA_ANNOUNCE_CONCURRENCY
 
+    storage_config: StorageConfig = StorageConfig()
+
 
 class Kademlia(Service):
     logger = logging.getLogger('alexandria.kademlia.Kademlia')
@@ -49,12 +52,16 @@ class Kademlia(Service):
     def __init__(self,
                  routing_table: RoutingTableAPI,
                  endpoint_db: EndpointDatabaseAPI,
-                 content_db: Mapping[bytes, bytes],
+                 local_content: Mapping[bytes, bytes],
                  client: ClientAPI,
                  network: NetworkAPI,
                  config: KademliaConfig = None,
                  ) -> None:
-        self.content_db = content_db
+        self.content_db = ContentManager(
+            center_id=self.client.local_node_id,
+            durable_db=local_content,
+            config=config.storage_config,
+        )
         self.content_index = collections.defaultdict(set)
         self.endpoint_db = endpoint_db
         self.routing_table = routing_table
