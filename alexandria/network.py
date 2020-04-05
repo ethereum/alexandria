@@ -129,6 +129,10 @@ class Network(NetworkAPI):
             for node_id, endpoints in received_nodes.items()
             for endpoint in endpoints
         )
+        sorted_found_nodes = tuple(sorted(
+            found_nodes,
+            key=lambda node: compute_distance(self.client.local_node_id, node.node_id),
+        ))
         self.logger.info(
             "Finished looking up %s in %d rounds: Found %d nodes after querying %d nodes",
             humanize_node_id(target_id),
@@ -136,7 +140,7 @@ class Network(NetworkAPI):
             len(found_nodes),
             len(queried_node_ids),
         )
-        return found_nodes
+        return sorted_found_nodes
 
     async def verify_and_add(self, node: Node) -> None:
         """

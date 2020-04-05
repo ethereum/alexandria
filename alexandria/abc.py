@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import collections
 import ipaddress
 from typing import (
     AsyncContextManager,
@@ -12,6 +13,7 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    Sized,
     Tuple,
     Type,
     TypeVar,
@@ -472,14 +474,17 @@ class Content(NamedTuple):
     data: bytes
 
 
-class ContentDatabaseAPI(ABC):
+class ContentDatabaseAPI(Sized):
+    total_capacity: int
     capacity: int
-    center_id: NodeID
 
     @abstractmethod
-    def get(self, key: bytes) -> None:
+    def keys(self) -> collections.KeysView:
         ...
-        return self._db[key]
+
+    @abstractmethod
+    def get(self, key: bytes) -> bytes:
+        ...
 
     @abstractmethod
     def set(self, content: Content) -> None:
@@ -490,7 +495,10 @@ class ContentDatabaseAPI(ABC):
         ...
 
 
-class ContentIndexAPI(ABC):
+class ContentIndexAPI(Sized):
+    total_capacity: int
+    capacity: int
+
     @abstractmethod
     def get_index(self, key: NodeID) -> FrozenSet[NodeID]:
         ...
@@ -501,4 +509,40 @@ class ContentIndexAPI(ABC):
 
     @abstractmethod
     def remove(self, location: Location) -> None:
+        ...
+
+
+class ContentStats(NamedTuple):
+    durable_item_count: int
+    ephemeral_db_count: int
+    ephemeral_db_total_capacity: int
+    ephemeral_db_capacity: int
+    ephemeral_index_total_capacity: int
+    ephemeral_index_capacity: int
+    cache_db_count: int
+    cache_db_total_capacity: int
+    cache_db_capacity: int
+    cache_index_total_capacity: int
+    cache_index_capacity: int
+
+
+class ContentManagerAPI(ABC):
+    @abstractmethod
+    def iter_content_keys(self) -> collections.KeysView:
+        ...
+
+    @abstractmethod
+    def ingest_content(self, content: ContentBundle) -> None:
+        ...
+
+    @abstractmethod
+    def get_content(self, key: bytes) -> bytes:
+        ...
+
+    @abstractmethod
+    def get_index(self, content_id: NodeID) -> FrozenSet[NodeID]:
+        ...
+
+    @abstractmethod
+    def get_stats(self) -> ContentStats:
         ...

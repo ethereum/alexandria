@@ -1,24 +1,33 @@
 import collections
 import functools
+import itertools
 import logging
 import random
 from typing import (
     Collection,
     Deque,
     Dict,
+    FrozenSet,
     Iterator,
     Mapping,
     NamedTuple,
     Optional,
     Set,
-    Tuple,
 )
 
-from eth_utils import encode_hex
+from eth_utils import encode_hex, to_tuple
 from eth_utils.toolz import groupby
 
 from alexandria._utils import content_key_to_node_id
-from alexandria.abc import ContentDatabaseAPI, ContentIndexAPI, Location, ContentBundle, Content
+from alexandria.abc import (
+    ContentDatabaseAPI,
+    ContentIndexAPI,
+    ContentManagerAPI,
+    ContentStats,
+    Location,
+    ContentBundle,
+    Content,
+)
 from alexandria.constants import MEGABYTE
 from alexandria.typing import NodeID
 from alexandria.routing_table import compute_log_distance, compute_distance
@@ -47,12 +56,13 @@ def get_eviction_probability(content_id: NodeID, center_id: NodeID) -> float:
     """
     if content_id == center_id:
         return 0.0
+    distance: int
     distance = compute_log_distance(content_id, center_id)
-    return 1 - (1 / 2**distance)
+    return float(1 - (1 / 2**distance))
 
 
-def iter_furthest_keys(center_id: NodeID, keys: Collection[bytes]) -> Iterator[NodeID]:
-    def sort_fn(key: bytes):
+def iter_furthest_keys(center_id: NodeID, keys: Collection[bytes]) -> Iterator[bytes]:
+    def sort_fn(key: bytes) -> int:
         content_id = content_key_to_node_id(key)
         return compute_distance(center_id, content_id)
 
@@ -67,11 +77,17 @@ class EphemeralDB(ContentDatabaseAPI):
         self.center_id = center_id
         self.capacity = capacity
 
+    def __len__(self) -> int:
+        return len(self._db)
+
+    def keys(self) -> collections.KeysView:
+        return self._db.keys()
+
     def _enforce_capacity(self) -> None:
         if self.capacity >= 0:
             return
 
-        for key in iter_furthest_keys(self._db.keys(), self.center_id):
+        for key in iter_furthest_keys(self.center_id, self._db.keys()):
             content_id = content_key_to_node_id(key)
             evict_probability = get_eviction_probability(self.center_id, content_id)
             should_evict = random.random() < evict_probability
@@ -81,7 +97,7 @@ class EphemeralDB(ContentDatabaseAPI):
                 if self.capacity >= 0:
                     break
 
-    def get(self, key: bytes) -> None:
+    def get(self, key: bytes) -> bytes:
         return self._db[key]
 
     def set(self, content: Content) -> None:
@@ -111,12 +127,15 @@ def iter_furthest_content_ids(center_id: NodeID,
 
 
 class EphemeralIndex(ContentIndexAPI):
-    _index: Dict[NodeID, Set[NodeID]]
+    _indices: Dict[NodeID, Set[NodeID]]
 
     def __init__(self, center_id: NodeID, capacity: int) -> None:
         self._indices = {}
         self.center_id = center_id
         self.capacity = capacity
+
+    def __len__(self) -> int:
+        return sum(len(index) for index in self._indices.values())
 
     def _enforce_capacity(self) -> None:
         if self.capacity >= 0:
@@ -139,8 +158,8 @@ class EphemeralIndex(ContentIndexAPI):
                 if self.capacity >= 0:
                     break
 
-    def get_index(self, key: NodeID) -> Set[NodeID]:
-        return self._indices(key)
+    def get_index(self, key: NodeID) -> FrozenSet[NodeID]:
+        return frozenset(self._indices[key])
 
     def add(self, location: Location) -> None:
         key, location_id = location
@@ -178,12 +197,18 @@ class CacheDB(ContentDatabaseAPI):
         self._last_cached_at = -1
         self._cache_db = {}
 
+    def __len__(self) -> int:
+        return len(self._records)
+
+    def keys(self) -> collections.KeysView:
+        return self.cache_db.keys()
+
     @property
     def cache_db(self) -> Mapping[bytes, bytes]:
         if self._last_cached_at < self._counter:
             self._cache_db = {
                 content.key: content.data
-                for content in self.cache_db_records
+                for content in self._records
             }
             self._last_cached_at = self._counter
         return self._cache_db
@@ -191,13 +216,13 @@ class CacheDB(ContentDatabaseAPI):
     def _enforce_capacity(self) -> None:
         while self.capacity < 0:
             oldest_content = self._records.pop()
-            self.remove(oldest_content)
+            self.delete(oldest_content.key)
 
     def _touch_record(self, content: Content) -> None:
         if content == self._records[0]:
             return
-        self.records.remove(content)
-        self.records.appendleft(content)
+        self._records.remove(content)
+        self._records.appendleft(content)
         self._counter += 1
 
     def _get_record(self, key: bytes) -> Content:
@@ -207,7 +232,7 @@ class CacheDB(ContentDatabaseAPI):
         else:
             raise KeyError(key)
 
-    def get(self, key: bytes) -> None:
+    def get(self, key: bytes) -> bytes:
         content = self._get_record(key)
         self._touch_record(content)
         return content.data
@@ -233,7 +258,7 @@ class CacheDB(ContentDatabaseAPI):
         self.capacity -= len(content.data)
         self._enforce_capacity()
 
-    def remove(self, key: bytes) -> None:
+    def delete(self, key: bytes) -> None:
         content = self._get_record(key)
         self._records.remove(content)
         self._counter += 1
@@ -241,14 +266,18 @@ class CacheDB(ContentDatabaseAPI):
 
 
 class CacheIndex(ContentIndexAPI):
-    _cache_indices: Mapping[NodeID, Set[NodeID]]
+    _records: Deque[Location]
+    _cache_indices: Mapping[NodeID, FrozenSet[NodeID]]
 
     def __init__(self, capacity: int) -> None:
         self.capacity = capacity
         self._records = collections.deque()
         self._counter = 0
         self._last_cached_at = -1
-        self._cache_db = {}
+        self._cache_indices = {}
+
+    def __len__(self) -> int:
+        return len(self._records)
 
     def _enforce_capacity(self) -> None:
         if self.capacity >= 0:
@@ -259,9 +288,9 @@ class CacheIndex(ContentIndexAPI):
             self.remove(oldest_record)
 
     @property
-    def cache_indices(self) -> Mapping[NodeID, Set[NodeID]]:
+    def cache_indices(self) -> Mapping[NodeID, FrozenSet[NodeID]]:
         if self._last_cached_at < self._counter:
-            records_by_node_id = groupby(0, self.cache_index_records)
+            records_by_node_id = groupby(0, self._records)
             self._cache_indices = {
                 node_id: frozenset(record.node_id for record in location_records)
                 for node_id, location_records in records_by_node_id.items()
@@ -269,7 +298,8 @@ class CacheIndex(ContentIndexAPI):
             self._last_cached_at = self._counter
         return self._cache_indices
 
-    def _get_records(self, content_id: NodeID) -> Tuple[Location]:
+    @to_tuple
+    def _get_records(self, content_id: NodeID) -> Iterator[Location]:
         for location in self._records:
             if location.content_id == content_id:
                 yield location
@@ -281,14 +311,11 @@ class CacheIndex(ContentIndexAPI):
         self._records.appendleft(location)
         self._counter += 1
 
-    def get_index(self, content_id: NodeID) -> Tuple[NodeID, ...]:
+    def get_index(self, content_id: NodeID) -> FrozenSet[NodeID]:
         index = self.cache_indices[content_id]
         for location in self._get_records(content_id):
             self._touch_record(location)
-        return tuple(sorted(
-            index,
-            key=lambda location_id: compute_distance(self.center_id, location_id),
-        ))
+        return index
 
     def add(self, location: Location) -> None:
         if location in self._records:
@@ -308,7 +335,7 @@ class CacheIndex(ContentIndexAPI):
             raise KeyError(location)
 
 
-class ContentManager:
+class ContentManager(ContentManagerAPI):
     """
     Wraps separate datastores for Durable/Ephemeral/Cache
         - Durable: externally controlled, read-only
@@ -323,13 +350,13 @@ class ContentManager:
     center_id: NodeID
 
     durable_db: Mapping[bytes, bytes]
-    durable_index: Mapping[NodeID, Set[NodeID]]
+    durable_index: Mapping[NodeID, FrozenSet[NodeID]]
 
-    ephemeral_db: EphemeralDB
-    ephemeral_index: EphemeralIndex
+    ephemeral_db: ContentDatabaseAPI
+    ephemeral_index: ContentIndexAPI
 
-    cache_db: CacheDB
-    cache_index: CacheIndex
+    cache_db: ContentDatabaseAPI
+    cache_index: ContentIndexAPI
 
     def __init__(self,
                  center_id: NodeID,
@@ -367,6 +394,29 @@ class ContentManager:
         self.cache_db = CacheDB(capacity=self.config.cache_storage_size)
         self.cache_index = CacheIndex(capacity=self.config.cache_index_size)
 
+    @to_tuple
+    def iter_content_keys(self) -> collections.KeysView:
+        return collections.KeysView(itertools.chain(
+            self.durable_db.keys(),
+            self.ephemeral_db.keys(),
+            self.cache_db.keys(),
+        ))
+
+    def get_stats(self) -> ContentStats:
+        return ContentStats(
+            durable_item_count=len(self.durable_db),
+            ephemeral_db_count=len(self.ephemeral_db),
+            ephemeral_db_total_capacity=self.ephemeral_db.total_capacity,
+            ephemeral_db_capacity=self.ephemeral_db.capacity,
+            ephemeral_index_total_capacity=self.ephemeral_index.total_capacity,
+            ephemeral_index_capacity=self.ephemeral_index.capacity,
+            cache_db_count=len(self.cache_db),
+            cache_db_total_capacity=self.cache_db.total_capacity,
+            cache_db_capacity=self.cache_db.capacity,
+            cache_index_total_capacity=self.cache_index.total_capacity,
+            cache_index_capacity=self.cache_index.capacity,
+        )
+
     def get_content(self, key: bytes) -> bytes:
         try:
             return self.durable_db[key]
@@ -396,7 +446,7 @@ class ContentManager:
                     encode_hex(value_from_ephemeral),
                     encode_hex(value_from_cache),
                 )
-                self.cache_db.set(key, value_from_ephemeral)
+                self.cache_db.set(Content(key, value_from_ephemeral))
             return value_from_ephemeral
         elif value_from_ephemeral is not None:
             return value_from_ephemeral
@@ -405,31 +455,34 @@ class ContentManager:
         else:
             raise Exception("Unreachable code block")
 
-    def get_index(self, content_id: NodeID) -> Tuple[NodeID]:
+    def get_index(self, content_id: NodeID) -> FrozenSet[NodeID]:
+        index_from_durable: FrozenSet[NodeID]
         try:
             index_from_durable = self.durable_index[content_id]
         except KeyError:
-            index_from_durable = set()
+            index_from_durable = frozenset()
 
+        index_from_ephemeral: FrozenSet[NodeID]
         try:
             index_from_ephemeral = self.ephemeral_index.get_index(content_id)
         except KeyError:
-            index_from_ephemeral = set()
+            index_from_ephemeral = frozenset()
 
+        index_from_cache: FrozenSet[NodeID]
         try:
             index_from_cache = self.cache_index.get_index(content_id)
         except KeyError:
-            index_from_cache = set()
+            index_from_cache = frozenset()
 
         return index_from_durable | index_from_ephemeral | index_from_cache
 
     def ingest_content(self, content: ContentBundle) -> None:
         if content.data is not None:
-            self.ingest_content_data(content.key, content.data)
+            self._ingest_content_data(content.key, content.data)
         content_id = content_key_to_node_id(content.key)
-        self.ingest_content_index(content_id, content.node_id)
+        self._ingest_content_index(content_id, content.node_id)
 
-    def ingest_content_data(self, key: bytes, data: bytes) -> None:
+    def _ingest_content_data(self, key: bytes, data: bytes) -> None:
         if key in self.durable_db:
             local_data = self.durable_db[key]
             if local_data != data:
@@ -444,10 +497,10 @@ class ContentManager:
             # the durable DB is canonical
             return
 
-        self.ephemeral_db.set(key, data)
-        self.cache_db.set(key, data)
+        self.ephemeral_db.set(Content(key, data))
+        self.cache_db.set(Content(key, data))
 
-    def process_content_index(self, content_id: NodeID, location_id: NodeID) -> None:
+    def _ingest_content_index(self, content_id: NodeID, location_id: NodeID) -> None:
         location = Location(content_id, location_id)
 
         self.ephemeral_index.add(location)

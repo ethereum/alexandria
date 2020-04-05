@@ -1,5 +1,3 @@
-import collections
-import functools
 import logging
 import secrets
 from typing import DefaultDict, Iterable, Mapping, NamedTuple, Set, Tuple
@@ -12,13 +10,14 @@ import trio
 from alexandria._utils import every, humanize_node_id, content_key_to_node_id
 from alexandria.abc import (
     ClientAPI,
+    ContentBundle,
     EndpointDatabaseAPI,
     NetworkAPI,
     Node,
     RoutingTableAPI,
 )
 from alexandria.constants import PING_TIMEOUT
-from alexandria.content_manager import StorageConfig,
+from alexandria.content_manager import StorageConfig, ContentManager
 from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
 from alexandria.typing import NodeID
 
@@ -49,6 +48,10 @@ class Kademlia(Service):
     logger = logging.getLogger('alexandria.kademlia.Kademlia')
     content_index: DefaultDict[bytes, Set[NodeID]]
 
+    client: ClientAPI
+    network: NetworkAPI
+    routing_table: RoutingTableAPI
+
     def __init__(self,
                  routing_table: RoutingTableAPI,
                  endpoint_db: EndpointDatabaseAPI,
@@ -57,24 +60,25 @@ class Kademlia(Service):
                  network: NetworkAPI,
                  config: KademliaConfig = None,
                  ) -> None:
+        if config is None:
+            config = KademliaConfig()
+        self.config = config
+
         self.content_db = ContentManager(
             center_id=self.client.local_node_id,
             durable_db=local_content,
             config=config.storage_config,
         )
-        self.content_index = collections.defaultdict(set)
+
         self.endpoint_db = endpoint_db
         self.routing_table = routing_table
         self.client = client
         self.network = network
 
-        if config is None:
-            config = KademliaConfig()
-        self.config = config
-
-        # populate the index
-        for key in self.content_db:
-            self.content_index[key].add(self.client.local_node_id)
+        (
+            self._inbound_content_send_channel,
+            self._inbound_content_receive_channel,
+        ) = trio.open_memory_channel[ContentBundle](256)
 
     async def run(self) -> None:
         self.manager.run_daemon_task(self._periodic_report_routing_table_status)
@@ -86,6 +90,10 @@ class Kademlia(Service):
         self.manager.run_daemon_task(self._handle_locate_requests)
         self.manager.run_daemon_task(self._handle_retrieve_requests)
 
+        self.manager.run_daemon_task(
+            self._handle_content_ingestion,
+            self._inbound_content_receive_channel,
+        )
         self.manager.run_daemon_task(self._periodically_announce_content)
 
         self.manager.run_daemon_task(self._ping_occasionally)
@@ -95,11 +103,12 @@ class Kademlia(Service):
 
     async def _periodic_report_routing_table_status(self) -> None:
         async for _ in every(30, 10):  # noqa: F841
-            stats = self.routing_table.get_stats()
-            if stats.full_buckets:
-                full_buckets = '/'.join((str(index) for index in stats.full_buckets))
+            routing_stats = self.routing_table.get_stats()
+            if routing_stats.full_buckets:
+                full_buckets = '/'.join((str(index) for index in routing_stats.full_buckets))
             else:
                 full_buckets = 'None'
+            content_stats = self.content_manager.get_stats()
             self.logger.info(
                 (
                     "\n"
@@ -109,18 +118,30 @@ class Kademlia(Service):
                     "         - full buckets: %s\n"
                     "         - %d nodes in replacement cache\n"
                     "       ContentDB():\n"
-                    "         - content: %d\n"
-                    "         - index: %d\n"
+                    "         - durable: %d\n"
+                    "         - ephemeral-db: %d (%d / %d)\n"
+                    "         - ephemeral-index: %d / %d\n"
+                    "         - cache-db: %d (%d / %d)\n"
+                    "         - cache-index: %d / %d\n"
                     "####################################################"
                 ),
                 humanize_node_id(self.client.local_node_id),
-                stats.bucket_size,
-                stats.num_buckets,
-                stats.total_nodes,
+                routing_stats.bucket_size,
+                routing_stats.num_buckets,
+                routing_stats.total_nodes,
                 full_buckets,
-                stats.num_in_replacement_cache,
-                len(self.content_db),
-                sum(len(location_keys) for location_keys in self.content_index.values()),
+                routing_stats.num_in_replacement_cache,
+                content_stats.durable_item_count,
+                content_stats.ephemeral_db_count,
+                content_stats.ephemeral_db_capacity,
+                content_stats.ephemeral_db_total_capacity,
+                content_stats.ephemeral_index_capacity,
+                content_stats.ephemeral_index_total_capacity,
+                content_stats.cache_db_count,
+                content_stats.cache_db_capacity,
+                content_stats.cache_db_total_capacity,
+                content_stats.cache_index_capacity,
+                content_stats.cache_index_total_capacity,
             )
 
     async def _handle_lookup_requests(self) -> None:
@@ -224,19 +245,30 @@ class Kademlia(Service):
                     await self.client.send_advertise(node, key=key, who=who)
 
             async for _ in every(self.config.ANNOUNCE_INTERVAL):  # noqa: F841
-                for key, value in tuple(self.content_db.items()):
-                    content_node_id = content_key_to_node_id(key)
-                    nodes_around = self.routing_table.iter_nodes_around(content_node_id)
+                for key in self.content_manager.iter_content_keys():
+                    content_id = content_key_to_node_id(key)
+                    nodes_around = await self.network.iterative_lookup(content_id)
                     for batch in partition_all(self.config.ANNOUNCE_CONCURRENCY, nodes_around):
-                        for node_id in batch:
-                            endpoint = self.endpoint_db.get_endpoint(node_id)
-                            node = Node(node_id, endpoint)
+                        for node in batch:
                             nursery.start_soon(
                                 do_announce,
                                 node,
                                 key,
                                 self.client.local_node,
                             )
+
+    async def _handle_content_ingestion(self,
+                                        receive_channel: trio.abc.ReceiveChannel[ContentBundle],
+                                        ) -> None:
+        limiter = trio.CapacityLimiter(1)
+        async with trio.open_nursery() as nursery:
+            async with receive_channel:
+                async for bundle in receive_channel:
+                    nursery.start_soon(trio.to_thread.run_sync(
+                        self.content_manager.ingest_content,
+                        bundle,
+                        limiter=limiter,
+                    ))
 
     async def _handle_advertise_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Advertise) as subscription:
@@ -249,16 +281,23 @@ class Kademlia(Service):
                 # TODO: check distance of key and store conditionally
                 self.content_index[payload.key].add(payload.node)
                 await self.client.send_ack(request.node, request_id=payload.request_id)
+                with trio.fail_after(1):
+                    await self._inbound_content_send_channel.send(ContentBundle(
+                        key=payload.key,
+                        data=None,
+                        node_id=request.node.node_id,
+                    ))
 
     async def _handle_locate_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Locate) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
                 payload = request.payload
+                content_id = content_key_to_node_id(payload.key)
                 # TODO: ping the node to ensure it is available (unless it is the sending node).
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
-                location_ids = tuple(self.content_index[payload.key])
+                location_ids = self.content_manager.get_index(content_id)
                 locations = tuple(
                     Node(node_id, self.endpoint_db.get_endpoint(node_id))
                     for node_id in location_ids
@@ -278,7 +317,7 @@ class Kademlia(Service):
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
                 try:
-                    data = self.content_db[payload.key]
+                    data = self.content_manager.get_content(payload.key)
                 except KeyError:
                     data = b''
 

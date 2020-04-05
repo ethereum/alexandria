@@ -18,6 +18,7 @@ from alexandria._utils import public_key_to_node_id
 from alexandria.abc import Endpoint, Node
 from alexandria.app import Application
 from alexandria.client import Client
+from alexandria.content_manager import StorageConfig
 from alexandria.constants import KEY_BYTE_SIZE
 from alexandria.kademlia import (
     KADEMLIA_LOOKUP_INTERVAL,
@@ -101,6 +102,16 @@ class ClientFactory(factory.Factory):  # type: ignore
     listen_on = factory.SubFactory(EndpointFactory)
 
 
+class StorageConfigFactory(factory.Factory):  # type: ignore
+    class Meta:
+        model = StorageConfig
+
+    ephemeral_storage_size = 4096
+    ephemeral_index_size: int = 1024
+    cache_storage_size: int = 1024
+    cache_index_size: int = 1024
+
+
 class KademliaConfigFactory(factory.Factory):  # type: ignore
     class Meta:
         model = KademliaConfig
@@ -108,6 +119,8 @@ class KademliaConfigFactory(factory.Factory):  # type: ignore
     LOOKUP_INTERVAL = factory.LazyFunction(lambda: KADEMLIA_LOOKUP_INTERVAL)
     PING_INTERVAL: int = factory.LazyFunction(lambda: KADEMLIA_PING_INTERVAL)
     ANNOUNCE_INTERVAL: int = factory.LazyFunction(lambda: KADEMLIA_ANNOUNCE_INTERVAL)
+
+    storage_config = factory.SubFactory(StorageConfigFactory)
 
 
 class ApplicationFactory(factory.Factory):  # type: ignore
