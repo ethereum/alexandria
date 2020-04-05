@@ -27,7 +27,7 @@ class RoutingTable(RoutingTableAPI):
     def __init__(self,
                  center_node_id: NodeID,
                  bucket_size: int,
-                 num_bits: int=KEY_BIT_SIZE) -> None:
+                 num_bits: int = KEY_BIT_SIZE) -> None:
         self.center_node_id = center_node_id
         self.bucket_size = bucket_size
         self._num_bits = num_bits

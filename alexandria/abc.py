@@ -8,6 +8,7 @@ from typing import (
     ContextManager,
     Generic,
     Iterator,
+    MutableMapping,
     NamedTuple,
     Optional,
     Sequence,
@@ -452,4 +453,11 @@ class NetworkAPI(ABC):
 
     @abstractmethod
     async def bond(self, node: Node) -> None:
+        ...
+
+
+class ContentDatabaseAPI(MutableMapping[bytes, bytes]):
+    @property
+    @abstractmethod
+    def total_size(self) -> int:
         ...
