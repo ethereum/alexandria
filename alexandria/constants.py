@@ -17,6 +17,9 @@ SINGLE_NODE_PAYLOAD_SIZE = 38
 # The number of node payloads that can fit into a datagram
 NODES_PER_PAYLOAD = FOUND_NODES_PAYLOAD_SIZE // 38
 
+# The maximum size of a data chunk
+CHUNK_MAX_SIZE = MAX_PACKET_SIZE - 32
+
 # Buffer size used for incoming discovery UDP datagrams (must be larger than
 # MAX_PACKET_SIZE)
 DATAGRAM_BUFFER_SIZE = MAX_PACKET_SIZE * 2

@@ -23,7 +23,7 @@ from alexandria.abc import (
     SessionAPI,
     TPayload,
 )
-from alexandria.constants import NODES_PER_PAYLOAD
+from alexandria.constants import CHUNK_MAX_SIZE, NODES_PER_PAYLOAD
 from alexandria.datagrams import DatagramListener
 from alexandria.exceptions import SessionNotFound
 from alexandria.events import Events
@@ -172,7 +172,6 @@ class Client(Service, ClientAPI):
         return request_id
 
     async def send_ack(self, node: Node, *, request_id: int) -> None:
-        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Ack(request_id),
             node,
@@ -244,7 +243,7 @@ class Client(Service, ClientAPI):
             await self.message_dispatcher.send_message(response)
             return 1
 
-        all_chunks = split_data_to_chunks(data)
+        all_chunks = split_data_to_chunks(CHUNK_MAX_SIZE, data)
         total_chunks = len(all_chunks)
 
         for index, chunk in enumerate(all_chunks):
