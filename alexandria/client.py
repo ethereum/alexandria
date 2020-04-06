@@ -415,12 +415,19 @@ class Client(Service, ClientAPI):
             self.pool.remove_session(session.remote_node_id)
             self.logger.debug('Removed defunkt session: %s', session)
 
+            fresh_session = await self._get_or_create_session(
+                remote_node,
+                is_initiator=False,
+            )
             # Now try again with a fresh session
             try:
-                await session.handle_inbound_packet(packet)
+                await fresh_session.handle_inbound_packet(packet)
             except DecryptionError:
-                self.pool.remove_session(session.remote_node_id)
-                self.logger.debug('Unable to read packet after resetting session: %s', session)
+                self.pool.remove_session(fresh_session.remote_node_id)
+                self.logger.debug(
+                    'Unable to read packet after resetting session: %s',
+                    fresh_session,
+                )
 
     async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram],
                                         ) -> None:
