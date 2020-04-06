@@ -24,7 +24,7 @@ from urllib import parse as urlparse
 
 from async_service import ServiceAPI
 from eth_keys import keys
-from eth_utils import to_int
+from eth_utils import to_int, remove_0x_prefix
 from ssz import sedes
 
 from alexandria.payloads import Ack, Chunk, FoundNodes, Locations, Pong
@@ -67,7 +67,7 @@ class Node(NamedTuple):
     @property
     def node_uri(self) -> str:
         from alexandria._utils import node_id_to_hex
-        node_id_as_hex = node_id_to_hex(self.node_id)
+        node_id_as_hex = remove_0x_prefix(node_id_to_hex(self.node_id))
 
         return f'node://{node_id_as_hex}@{self.endpoint}'
 

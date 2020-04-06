@@ -7,6 +7,7 @@ from typing import Collection, Mapping
 
 from async_service import background_trio_service, Service
 from eth_keys import keys
+from eth_utils import encode_hex, decode_hex
 
 from alexandria._utils import sha256
 from alexandria.abc import Endpoint, Node
@@ -75,19 +76,29 @@ async def main() -> None:
 
     logger = logging.getLogger()
 
-    if args.private_key_seed is None:
-        private_key = keys.PrivateKey(secrets.token_bytes(32))
-    else:
-        private_key = keys.PrivateKey(sha256(args.private_key_seed))
-
     bootnodes_raw = args.bootnodes or ()
     bootnodes = tuple(
         Node.from_node_uri(node_uri) for node_uri in bootnodes_raw
     )
+
     application_root_dir = get_xdg_alexandria_root()
     if not application_root_dir.exists():
         application_root_dir.mkdir(parents=True, exist_ok=True)
+
     ipc_path = application_root_dir / 'jsonrpc.ipc'
+
+    if args.private_key_seed is None:
+        node_key_path = application_root_dir / 'nodekey'
+        if node_key_path.exists():
+            private_key_hex = node_key_path.read_text().strip()
+            private_key_bytes = decode_hex(private_key_hex)
+            private_key = keys.PrivateKey(private_key_bytes)
+        else:
+            private_key_bytes = secrets.token_bytes(32)
+            node_key_path.write_text(encode_hex(private_key_bytes))
+            private_key = keys.PrivateKey(private_key_bytes)
+    else:
+        private_key = keys.PrivateKey(sha256(args.private_key_seed))
 
     alexandria = Alexandria(
         private_key=private_key,
