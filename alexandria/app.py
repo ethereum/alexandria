@@ -121,5 +121,7 @@ class Application(Service):
         self.logger.info("Attempting to bond with %d bootnodes", len(self.bootnodes))
 
         async with trio.open_nursery() as nursery:
-            for enode in self.bootnodes:
-                nursery.start_soon(self._bond, enode)
+            for node in self.bootnodes:
+                if node.node_id == self.client.local_node_id:
+                    continue
+                nursery.start_soon(self._bond, node)
