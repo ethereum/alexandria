@@ -78,21 +78,10 @@ class Application(Service):
 
         await self.client.wait_ready()
         self.manager.run_task(self._bootstrap)
+        await self._bonded.wait()
 
-        if self.bootnodes:
-            try:
-                with trio.fail_after(10):
-                    await self._bonded.wait()
-            except trio.TooSlowError:
-                self.logger.error(
-                    "Failed to bond with network: %s",
-                    self.client.local_node,
-                )
-                self.manager.cancel()
-                return
-
-        self.manager.run_daemon_child_service(self.kademlia)
         self.manager.run_daemon_task(self._monitor_endpoints)
+        self.manager.run_daemon_child_service(self.kademlia)
 
         await self.manager.wait_finished()
 
@@ -113,13 +102,25 @@ class Application(Service):
                 self.routing_table.update(session.remote_node_id)
 
     async def _bond(self, node: Node) -> None:
+        self.logger.debug('Attempting bond with %s', node)
         with trio.move_on_after(BOND_TIMEOUT):
             await self.network.bond(node)
             self._bonded.set()
 
     async def _bootstrap(self) -> None:
-        self.logger.info("Attempting to bond with %d bootnodes", len(self.bootnodes))
-
         async with trio.open_nursery() as nursery:
-            for node in self.bootnodes:
-                nursery.start_soon(self._bond, node)
+            while self.manager.is_running:
+                self.logger.info("Attempting to bond with %d bootnodes", len(self.bootnodes))
+
+                if not self.routing_table.is_empty:
+                    break
+
+                for node in self.bootnodes:
+                    nursery.start_soon(self._bond, node)
+
+                with trio.move_on_after(BOND_TIMEOUT * 2) as scope:
+                    await self._bonded.wait()
+                    break
+
+                if scope.cancelled_caught:
+                    self.logger.info("Bonding failed... trying again")

@@ -400,7 +400,7 @@ class Client(Service, ClientAPI):
                 await self._outbound_datagram_send_channel.send(packet.as_datagram())
                 self.logger.debug('packet > %s', packet)
 
-    async def _handle_session_packet(self, SessionAPI, datagram: Datagram) -> None:
+    async def _handle_session_packet(self, datagram: Datagram) -> None:
         packet = decode_packet(datagram.data)
         remote_node_id = recover_source_id_from_tag(packet.tag, self.local_node_id)
         remote_node = Node(remote_node_id, datagram.endpoint)
