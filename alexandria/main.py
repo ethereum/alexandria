@@ -1,3 +1,22 @@
+import ipaddress
+import logging
+import os
+import pathlib
+import secrets
+from typing import Collection, Mapping
+
+from async_service import background_trio_service, Service
+from eth_keys import keys
+
+from alexandria._utils import sha256
+from alexandria.abc import Endpoint, Node
+from alexandria.app import Application
+from alexandria.cli_parser import parser
+from alexandria.config import DEFAULT_CONFIG, KademliaConfig
+from alexandria.logging import setup_logging
+from alexandria.rpc import RPCServer
+from alexandria.xdg import get_xdg_alexandria_root
+
 ALEXANDRIA_HEADER = "\n".join((
     "",
     r"           _                          _      _       ",
@@ -10,23 +29,40 @@ ALEXANDRIA_HEADER = "\n".join((
 ))
 
 
+class Alexandria(Service):
+    logger = logging.getLogger('alexandria')
+
+    def __init__(self,
+                 private_key: keys.PrivateKey,
+                 listen_on: Endpoint,
+                 bootnodes: Collection[Node],
+                 local_content: Mapping[bytes, bytes],
+                 kademlia_config: KademliaConfig,
+                 ipc_path: pathlib.Path,
+                 ) -> None:
+        self.application = Application(
+            bootnodes=bootnodes,
+            private_key=private_key,
+            listen_on=listen_on,
+            local_content=local_content,
+            config=kademlia_config,
+        )
+        self.json_rpc_server = RPCServer(
+            ipc_path=ipc_path,
+            client=self.application.client,
+            network=self.application.network,
+            kademlia=self.application.kademlia,
+            routing_table=self.application.routing_table,
+        )
+
+    async def run(self) -> None:
+        self.logger.info("Node: %s", self.application.client.local_node.node_uri)
+        self.manager.run_daemon_child_service(self.application)
+        self.manager.run_daemon_child_service(self.json_rpc_server)
+        await self.manager.wait_finished()
+
+
 async def main() -> None:
-    import ipaddress
-    import logging
-    import os
-    import secrets
-
-    from async_service import background_trio_service
-
-    from alexandria._utils import sha256
-    from alexandria.abc import Endpoint
-    from alexandria.application import Application
-    from alexandria.cli_parser import parser
-    from alexandria.enode import ENode
-    from alexandria.logging import setup_logging
-
-    from eth_keys import keys
-
     DEFAULT_LISTEN_ON = Endpoint(ipaddress.IPv4Address('0.0.0.0'), 8628)
 
     args = parser.parse_args()
@@ -46,16 +82,23 @@ async def main() -> None:
 
     bootnodes_raw = args.bootnodes or ()
     bootnodes = tuple(
-        ENode.from_enode_uri(enode).node for enode in bootnodes_raw
+        Node.from_node_uri(node_uri) for node_uri in bootnodes_raw
     )
+    application_root_dir = get_xdg_alexandria_root()
+    if not application_root_dir.exists():
+        application_root_dir.mkdir(parents=True, exist_ok=True)
+    ipc_path = application_root_dir / 'jsonrpc.ipc'
 
-    application = Application(
-        bootnodes=bootnodes,
+    alexandria = Alexandria(
         private_key=private_key,
         listen_on=listen_on,
+        bootnodes=bootnodes,
+        local_content={},
+        kademlia_config=DEFAULT_CONFIG,
+        ipc_path=ipc_path,
     )
 
     logger.info(ALEXANDRIA_HEADER)
     logger.info("Started main process (pid=%d)", os.getpid())
-    async with background_trio_service(application) as manager:
+    async with background_trio_service(alexandria) as manager:
         await manager.wait_finished()

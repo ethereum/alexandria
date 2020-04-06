@@ -1,6 +1,6 @@
 import logging
 import secrets
-from typing import Iterable, Mapping, NamedTuple, Optional, Tuple
+from typing import Iterable, Mapping, Optional, Tuple
 
 from async_service import Service
 from eth_utils import encode_hex, to_tuple
@@ -13,21 +13,17 @@ from alexandria.abc import (
     ContentBundle,
     ContentManagerAPI,
     EndpointDatabaseAPI,
+    KademliaAPI,
     NetworkAPI,
     Node,
     RoutingTableAPI,
 )
+from alexandria.config import KademliaConfig
 from alexandria.constants import PING_TIMEOUT
-from alexandria.content_manager import StorageConfig, ContentManager
+from alexandria.content_manager import ContentManager
 from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
 from alexandria.routing_table import compute_distance
 from alexandria.typing import NodeID
-
-
-KADEMLIA_PING_INTERVAL = 30  # interval of outgoing pings sent to maintain the routing table
-KADEMLIA_LOOKUP_INTERVAL = 60  # intervals between lookups
-KADEMLIA_ANNOUNCE_INTERVAL = 600  # 10 minutes
-KADEMLIA_ANNOUNCE_CONCURRENCY = 3
 
 
 NodePayload = Tuple[NodeID, bytes, int]
@@ -37,16 +33,7 @@ class _EmptyFindNodesResponse(Exception):
     pass
 
 
-class KademliaConfig(NamedTuple):
-    LOOKUP_INTERVAL: int = KADEMLIA_LOOKUP_INTERVAL
-    PING_INTERVAL: int = KADEMLIA_PING_INTERVAL
-    ANNOUNCE_INTERVAL: int = KADEMLIA_ANNOUNCE_INTERVAL
-    ANNOUNCE_CONCURRENCY: int = KADEMLIA_ANNOUNCE_CONCURRENCY
-
-    storage_config: StorageConfig = StorageConfig()
-
-
-class Kademlia(Service):
+class Kademlia(Service, KademliaAPI):
     logger = logging.getLogger('alexandria.kademlia.Kademlia')
 
     client: ClientAPI
@@ -103,14 +90,14 @@ class Kademlia(Service):
         await self.manager.wait_finished()
 
     async def _periodic_report_routing_table_status(self) -> None:
-        async for _ in every(30, 10):  # noqa: F841
+        async for _ in every(300, 10):  # noqa: F841
             routing_stats = self.routing_table.get_stats()
             if routing_stats.full_buckets:
                 full_buckets = '/'.join((str(index) for index in routing_stats.full_buckets))
             else:
                 full_buckets = 'None'
             content_stats = self.content_manager.get_stats()
-            self.logger.info(
+            self.logger.debug(
                 (
                     "\n"
                     "###################[%s]#####################\n"

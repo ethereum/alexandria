@@ -6,6 +6,7 @@ from typing import (
     Awaitable,
     Collection,
     ContextManager,
+    Deque,
     FrozenSet,
     Generic,
     Iterator,
@@ -19,11 +20,12 @@ from typing import (
     Type,
     TypeVar,
 )
-
-from ssz import sedes
+from urllib import parse as urlparse
 
 from async_service import ServiceAPI
 from eth_keys import keys
+from eth_utils import decode_hex
+from ssz import sedes
 
 from alexandria.payloads import Ack, Chunk, FoundNodes, Locations, Pong
 from alexandria.typing import AES128Key, NodeID, Tag
@@ -61,6 +63,27 @@ class Node(NamedTuple):
     def __str__(self) -> str:
         from alexandria._utils import humanize_node_id
         return f"{humanize_node_id(self.node_id)}@{self.endpoint}"
+
+    @property
+    def node_uri(self) -> str:
+        from alexandria._utils import node_id_to_hex
+        node_id_as_hex = node_id_to_hex(self.node_id)
+
+        return f'node://{node_id_as_hex}@{self.endpoint}'
+
+    @classmethod
+    def from_node_uri(cls, uri: str) -> 'Node':
+        from alexandria.validation import validate_node_uri
+
+        validate_node_uri(uri)  # Be no more permissive than the validation
+        parsed = urlparse.urlparse(uri)
+        if parsed.username is None:
+            raise Exception("Unreachable code path")
+        pubkey = keys.PublicKey(decode_hex(parsed.username))
+        if parsed.port is None:
+            raise Exception("Unreachable code path")
+        endpoint = Endpoint(ipaddress.IPv4Address(parsed.hostname), parsed.port)
+        return cls(pubkey, endpoint)
 
     def to_payload(self) -> Tuple[NodeID, bytes, int]:
         return (
@@ -404,8 +427,15 @@ class RoutingTableStats(NamedTuple):
 
 
 class RoutingTableAPI(Collection[NodeID]):
-    bucket_size: int
     center_node_id: NodeID
+    bucket_size: int
+    bucket_count: int
+
+    buckets: Tuple[Deque[NodeID], ...]
+
+    replacement_caches: Tuple[Deque[NodeID], ...]
+
+    bucket_update_order: Deque[int]
 
     @abstractmethod
     def get_stats(self) -> RoutingTableStats:
@@ -571,3 +601,7 @@ class ContentManagerAPI(ABC):
     @abstractmethod
     def get_stats(self) -> ContentStats:
         ...
+
+
+class KademliaAPI(ServiceAPI):
+    content_manager: ContentManagerAPI

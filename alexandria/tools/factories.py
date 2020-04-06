@@ -18,13 +18,12 @@ from alexandria._utils import public_key_to_node_id
 from alexandria.abc import Endpoint, Node
 from alexandria.app import Application
 from alexandria.client import Client
-from alexandria.content_manager import StorageConfig
-from alexandria.constants import KEY_BYTE_SIZE
-from alexandria.kademlia import (
+from alexandria.config import KademliaConfig, StorageConfig
+from alexandria.constants import (
+    KEY_BYTE_SIZE,
     KADEMLIA_LOOKUP_INTERVAL,
     KADEMLIA_PING_INTERVAL,
     KADEMLIA_ANNOUNCE_INTERVAL,
-    KademliaConfig,
 )
 
 

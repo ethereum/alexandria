@@ -11,7 +11,6 @@ from typing import (
     Iterator,
     KeysView,
     Mapping,
-    NamedTuple,
     Optional,
     Set,
     Tuple,
@@ -30,21 +29,9 @@ from alexandria.abc import (
     ContentBundle,
     Content,
 )
-from alexandria.constants import MEGABYTE
+from alexandria.config import StorageConfig
 from alexandria.typing import NodeID
 from alexandria.routing_table import compute_log_distance, compute_distance
-
-
-class StorageConfig(NamedTuple):
-    # number of bytes
-    ephemeral_storage_size: int = 100 * MEGABYTE
-    # number of index entries (fixed size per entry)
-    ephemeral_index_size: int = 1000
-
-    # number of bytes
-    cache_storage_size: int = 100 * MEGABYTE
-    # number of index entries (fixed size per entry)
-    cache_index_size: int = 1000
 
 
 def get_eviction_probability(content_id: NodeID, center_id: NodeID) -> float:

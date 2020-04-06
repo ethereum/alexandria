@@ -7,10 +7,10 @@ from setuptools import (
 
 extras_require = {
     'test': [
-        "pytest==3.3.2",
+        "pytest==5.4.1",
         "pytest-xdist",
         "pytest-trio==0.5.2",
-        "tox>=2.9.1,<3",
+        "tox==3.14.6",
     ],
     'lint': [
         "flake8==3.7.9",
@@ -64,10 +64,12 @@ setup(
         "async-generator==1.10",
         "async-service==0.1.0a7",
         "coincurve==10.0.0",
-        "eth-keys==0.3.1",
+        "eth-keys==0.2.4",
         "eth-utils>=1,<2",
+        "ssz==0.2.4",
         "trio==0.13.0",
         "trio-typing==0.3.0",
+        "web3==5.7.0",
     ],
     python_requires='>=3.6, <4',
     extras_require=extras_require,

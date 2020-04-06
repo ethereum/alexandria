@@ -6,7 +6,14 @@ from eth_keys import keys
 import trio
 
 from alexandria._utils import humanize_node_id
-from alexandria.abc import ClientAPI, Endpoint, EndpointDatabaseAPI, Node, RoutingTableAPI
+from alexandria.abc import (
+    ClientAPI,
+    Endpoint,
+    EndpointDatabaseAPI,
+    KademliaAPI,
+    Node,
+    RoutingTableAPI,
+)
 from alexandria.client import Client
 from alexandria.endpoint_db import MemoryEndpointDB
 from alexandria.kademlia import Kademlia, KademliaConfig
@@ -25,6 +32,7 @@ class Application(Service):
     endpoint_db: EndpointDatabaseAPI
     routing_table: RoutingTableAPI
     config: KademliaConfig
+    kademlia: KademliaAPI
 
     def __init__(self,
                  bootnodes: Collection[Node],
@@ -51,7 +59,7 @@ class Application(Service):
             endpoint_db=self.endpoint_db,
             routing_table=self.routing_table,
         )
-        self._kademlia = Kademlia(
+        self.kademlia = Kademlia(
             routing_table=self.routing_table,
             local_content=self.local_content,
             endpoint_db=self.endpoint_db,
@@ -83,7 +91,7 @@ class Application(Service):
                 self.manager.cancel()
                 return
 
-        self.manager.run_daemon_child_service(self._kademlia)
+        self.manager.run_daemon_child_service(self.kademlia)
         self.manager.run_daemon_task(self._monitor_endpoints)
 
         await self.manager.wait_finished()

@@ -30,13 +30,13 @@ class RoutingTable(RoutingTableAPI):
                  num_bits: int = KEY_BIT_SIZE) -> None:
         self.center_node_id = center_node_id
         self.bucket_size = bucket_size
-        self._num_bits = num_bits
+        self.bucket_count = num_bits
 
         self.buckets: Tuple[Deque[NodeID], ...] = tuple(
-            collections.deque(maxlen=bucket_size) for _ in range(self._num_bits)
+            collections.deque(maxlen=bucket_size) for _ in range(self.bucket_count)
         )
         self.replacement_caches: Tuple[Deque[NodeID], ...] = tuple(
-            collections.deque() for _ in range(self._num_bits)
+            collections.deque() for _ in range(self.bucket_count)
         )
 
         self.bucket_update_order: Deque[int] = collections.deque()

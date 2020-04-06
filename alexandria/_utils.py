@@ -7,8 +7,12 @@ from eth_keys import keys
 from eth_typing import Hash32
 import trio
 
-from eth_utils import humanize_hash, to_tuple
+from eth_utils import encode_hex, humanize_hash, to_tuple
 from alexandria.typing import NodeID
+
+
+def node_id_to_hex(node_id: NodeID) -> str:
+    return encode_hex(node_id.to_bytes(32, 'big'))
 
 
 def humanize_node_id(node_id: NodeID) -> str:
