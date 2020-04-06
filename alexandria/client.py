@@ -20,12 +20,13 @@ from alexandria.abc import (
     MessageAPI,
     NetworkPacket,
     Node,
+    PacketAPI,
     SessionAPI,
     TPayload,
 )
 from alexandria.constants import CHUNK_MAX_SIZE, NODES_PER_PAYLOAD
 from alexandria.datagrams import DatagramListener
-from alexandria.exceptions import SessionNotFound
+from alexandria.exceptions import SessionNotFound, DecryptionError
 from alexandria.events import Events
 from alexandria.packets import decode_packet
 from alexandria.pool import Pool
@@ -389,6 +390,12 @@ class Client(Service, ClientAPI):
                 await self._outbound_datagram_send_channel.send(packet.as_datagram())
                 self.logger.debug('packet > %s', packet)
 
+    async def _handle_session_packet(self, session: SessionAPI, packet: PacketAPI) -> None:
+        try:
+            await session.handle_inbound_packet(packet)
+        except DecryptionError:
+            self.pool.remove_session(session.remote_node_id)
+
     async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram],
                                         ) -> None:
         try:
@@ -403,7 +410,7 @@ class Client(Service, ClientAPI):
                             is_initiator=False,
                         )
 
-                        nursery.start_soon(session.handle_inbound_packet, packet)
+                        nursery.start_soon(self._handle_session_packet, session, packet)
                         self.logger.debug('decoded datagram %s dispatched to %s', datagram, session)
         except trio.BrokenResourceError:
             pass

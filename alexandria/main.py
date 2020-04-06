@@ -63,6 +63,11 @@ class Alexandria(Service):
         await self.manager.wait_finished()
 
 
+DEFAULT_BOOTNODES = (
+    Node.from_node_uri('node://157d841a79faa0dc11180724ecca44322fa07f9b5b8950e4f10c13dcbac9e074@74.207.253.18:30314'),  # noqa: E501
+)
+
+
 async def main() -> None:
     DEFAULT_LISTEN_ON = Endpoint(ipaddress.IPv4Address('0.0.0.0'), 8628)
 
@@ -76,10 +81,12 @@ async def main() -> None:
 
     logger = logging.getLogger()
 
-    bootnodes_raw = args.bootnodes or ()
-    bootnodes = tuple(
-        Node.from_node_uri(node_uri) for node_uri in bootnodes_raw
-    )
+    if args.bootnodes is not None:
+        bootnodes = tuple(
+            Node.from_node_uri(node_uri) for node_uri in args.bootnodes
+        )
+    else:
+        bootnodes = DEFAULT_BOOTNODES
 
     application_root_dir = get_xdg_alexandria_root()
     if not application_root_dir.exists():

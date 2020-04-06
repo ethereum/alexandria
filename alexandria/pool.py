@@ -39,6 +39,10 @@ class Pool(PoolAPI):
         self._outbound_packet_send_channel = outbound_packet_send_channel
         self._inbound_message_send_channel = inbound_message_send_channel
 
+    def remove_session(self, remote_node_id: NodeID) -> None:
+        if remote_node_id in self._sessions:
+            self._sessions.pop(remote_node_id)
+
     def has_session(self, remote_node_id: NodeID) -> bool:
         return remote_node_id in self._sessions
 
