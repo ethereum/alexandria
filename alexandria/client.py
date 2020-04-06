@@ -393,12 +393,27 @@ class Client(Service, ClientAPI):
                 await self._outbound_datagram_send_channel.send(packet.as_datagram())
                 self.logger.debug('packet > %s', packet)
 
-    async def _handle_session_packet(self, session: SessionAPI, packet: PacketAPI) -> None:
+    async def _handle_session_packet(self, session: SessionAPI, datagram: Datagram) -> None:
+        packet = decode_packet(datagram.data)
+        remote_node_id = recover_source_id_from_tag(packet.tag, self.local_node_id)
+        remote_node = Node(remote_node_id, datagram.endpoint)
+        session = await self._get_or_create_session(
+            remote_node,
+            is_initiator=False,
+        )
+
         try:
             await session.handle_inbound_packet(packet)
         except DecryptionError:
             self.pool.remove_session(session.remote_node_id)
             self.logger.debug('Removed defunkt session: %s', session)
+
+        # Now try again with a fresh session
+        try:
+            await session.handle_inbound_packet(packet)
+        except DecryptionError:
+            self.pool.remove_session(session.remote_node_id)
+            self.logger.debug('Unable to read packet after resetting session: %s', session)
 
     async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram],
                                         ) -> None:
@@ -406,15 +421,7 @@ class Client(Service, ClientAPI):
             async with trio.open_nursery() as nursery:
                 async with receive_channel:
                     async for datagram in receive_channel:
-                        packet = decode_packet(datagram.data)
-                        remote_node_id = recover_source_id_from_tag(packet.tag, self.local_node_id)
-                        remote_node = Node(remote_node_id, datagram.endpoint)
-                        session = await self._get_or_create_session(
-                            remote_node,
-                            is_initiator=False,
-                        )
-
-                        nursery.start_soon(self._handle_session_packet, session, packet)
-                        self.logger.debug('decoded datagram %s dispatched to %s', datagram, session)
+                        nursery.start_soon(self._handle_session_packet, datagram)
+                        self.logger.debug('dispatched inbound datagram %s', datagram)
         except trio.BrokenResourceError:
             pass
