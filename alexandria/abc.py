@@ -24,6 +24,7 @@ from urllib import parse as urlparse
 
 from async_service import ServiceAPI
 from eth_keys import keys
+from eth_typing import HexStr
 from eth_utils import to_int, remove_0x_prefix
 from ssz import sedes
 
@@ -67,7 +68,7 @@ class Node(NamedTuple):
     @property
     def node_uri(self) -> str:
         from alexandria._utils import node_id_to_hex
-        node_id_as_hex = remove_0x_prefix(node_id_to_hex(self.node_id))
+        node_id_as_hex = remove_0x_prefix(HexStr(node_id_to_hex(self.node_id)))
 
         return f'node://{node_id_as_hex}@{self.endpoint}'
 
@@ -79,7 +80,7 @@ class Node(NamedTuple):
         parsed = urlparse.urlparse(uri)
         if parsed.username is None:
             raise Exception("Unreachable code path")
-        node_id = to_int(hexstr=parsed.username)
+        node_id = NodeID(to_int(hexstr=parsed.username))
         if parsed.port is None:
             raise Exception("Unreachable code path")
         endpoint = Endpoint(ipaddress.IPv4Address(parsed.hostname), parsed.port)
@@ -247,6 +248,10 @@ class PoolAPI(ABC):
 
     @abstractmethod
     def create_session(self, remote_node: Node, is_initiator: bool) -> SessionAPI:
+        ...
+
+    @abstractmethod
+    def remove_session(self, remote_node_id: NodeID) -> None:
         ...
 
 

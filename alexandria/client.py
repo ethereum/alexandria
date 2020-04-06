@@ -322,6 +322,9 @@ class Client(Service, ClientAPI):
                                      node: Node,
                                      *,
                                      is_initiator: bool) -> SessionAPI:
+        if node.node_id == self.local_node_id:
+            raise Exception("Cannot create session with self")
+
         try:
             session = self.pool.get_session(node.node_id)
         except SessionNotFound:

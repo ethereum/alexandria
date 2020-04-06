@@ -23,6 +23,7 @@ from alexandria.abc import (
     RoutingTableAPI,
 )
 from alexandria.constants import PING_TIMEOUT
+from alexandria.typing import NodeID
 
 NEW_LINE = "\n"
 
@@ -239,7 +240,7 @@ class RPCServer(Service):
                            node_id_as_hex: str,
                            ip_address: str,
                            port: int) -> str:
-        node_id = to_int(hexstr=node_id_as_hex)
+        node_id = NodeID(to_int(hexstr=node_id_as_hex))
         node = Node(
             node_id,
             Endpoint(ipaddress.IPv4Address(ip_address), port),
