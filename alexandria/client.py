@@ -395,6 +395,7 @@ class Client(Service, ClientAPI):
             await session.handle_inbound_packet(packet)
         except DecryptionError:
             self.pool.remove_session(session.remote_node_id)
+            self.logger.debug('Removed defunkt session: %s', session)
 
     async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram],
                                         ) -> None:

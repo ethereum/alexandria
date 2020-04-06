@@ -69,7 +69,7 @@ DEFAULT_BOOTNODES = (
 
 
 async def main() -> None:
-    DEFAULT_LISTEN_ON = Endpoint(ipaddress.IPv4Address('0.0.0.0'), 8628)
+    DEFAULT_LISTEN_ON = Endpoint(ipaddress.IPv4Address('0.0.0.0'), 30314)
 
     args = parser.parse_args()
     setup_logging(args.log_level)

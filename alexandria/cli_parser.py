@@ -38,7 +38,7 @@ alexandria_parser.add_argument(
 logging_parser.add_argument(
     '-l',
     '--log-level',
-    type=str,
+    type=int,
     dest="log_level",
     help=(
         "Configure the logging level. "
