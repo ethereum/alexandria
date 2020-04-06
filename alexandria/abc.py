@@ -24,7 +24,7 @@ from urllib import parse as urlparse
 
 from async_service import ServiceAPI
 from eth_keys import keys
-from eth_utils import decode_hex
+from eth_utils import to_int
 from ssz import sedes
 
 from alexandria.payloads import Ack, Chunk, FoundNodes, Locations, Pong
@@ -79,11 +79,11 @@ class Node(NamedTuple):
         parsed = urlparse.urlparse(uri)
         if parsed.username is None:
             raise Exception("Unreachable code path")
-        pubkey = keys.PublicKey(decode_hex(parsed.username))
+        node_id = to_int(hexstr=parsed.username)
         if parsed.port is None:
             raise Exception("Unreachable code path")
         endpoint = Endpoint(ipaddress.IPv4Address(parsed.hostname), parsed.port)
-        return cls(pubkey, endpoint)
+        return cls(node_id, endpoint)
 
     def to_payload(self) -> Tuple[NodeID, bytes, int]:
         return (
