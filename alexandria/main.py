@@ -65,6 +65,7 @@ class Alexandria(Service):
 
 DEFAULT_BOOTNODES = (
     Node.from_node_uri('node://157d841a79faa0dc11180724ecca44322fa07f9b5b8950e4f10c13dcbac9e074@74.207.253.18:30314'),  # noqa: E501
+    Node.from_node_uri('node://b8fe2b71b9138e65ee48e6a0ab3ebd63622c8e2e46c963cbf71bc351132b39af@192.155.84.246:30314'),  # noqa: E501
 )
 
 
