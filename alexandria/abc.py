@@ -341,6 +341,10 @@ class ClientAPI(ServiceAPI):
     message_dispatcher: MessageDispatcherAPI
     pool: PoolAPI
 
+    @abstractmethod
+    async def wait_ready(self) -> None:
+        ...
+
     #
     # Singular Message Sending
     #

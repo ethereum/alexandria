@@ -98,6 +98,11 @@ class Client(Service, ClientAPI):
             self._inbound_message_receive_channel,
         )
 
+        self._ready = trio.Event()
+
+    async def wait_ready(self) -> None:
+        await self._ready.wait()
+
     #
     # Send Mesasges: Routing
     #
@@ -341,7 +346,8 @@ class Client(Service, ClientAPI):
     async def run(self) -> None:
         # Run the subscription manager with gets fed all decoded inbound
         # messages and dispatches them to individual subscriptions.
-        self.manager.run_daemon_child_service(self.message_dispatcher)
+        manager = self.manager.run_daemon_child_service(self.message_dispatcher)
+        await manager.wait_started()
 
         listener = DatagramListener(
             self.listen_on,
@@ -369,6 +375,8 @@ class Client(Service, ClientAPI):
                 humanize_node_id(self.local_node_id),
                 self.listen_on,
             )
+
+            self._ready.set()
             await self.manager.wait_finished()
 
     async def _handle_outbound_messages(self,

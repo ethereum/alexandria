@@ -76,10 +76,7 @@ class Application(Service):
             async with self.client.events.listening.subscribe():
                 self.manager.run_daemon_child_service(self.client)
 
-        # TODO: hack: this gives the MessageDispatcher service enough time to
-        # be fully started
-        await trio.sleep(0.01)
-
+        await self.client.wait_ready()
         self.manager.run_task(self._bootstrap)
 
         if self.bootnodes:
