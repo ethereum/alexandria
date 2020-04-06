@@ -3,14 +3,7 @@ import ipaddress
 
 from urllib import parse as urlparse
 
-from eth_utils import (
-    decode_hex,
-    ValidationError,
-)
-
-from eth_keys import (
-    keys,
-)
+from eth_utils import ValidationError
 
 
 def validate_node_uri(enode: str, require_ip: bool = False) -> None:
@@ -19,13 +12,11 @@ def validate_node_uri(enode: str, require_ip: bool = False) -> None:
     except ValueError as e:
         raise ValidationError(str(e))
 
-    if parsed.scheme != 'enode' or not parsed.username:
-        raise ValidationError('enode string must be of the form "enode://public-key@ip:port"')
+    if parsed.scheme != 'node' or not parsed.username:
+        raise ValidationError('node string must be of the form "node://nodeid@ip:port"')
 
-    if not re.match('^[0-9a-fA-F]{128}$', parsed.username):
-        raise ValidationError('public key must be a 128-character hex string')
-
-    decoded_username = decode_hex(parsed.username)
+    if not re.match('^[0-9a-fA-F]{64}$', parsed.username):
+        raise ValidationError('public key must be a 64-character hex string')
 
     try:
         ip = ipaddress.ip_address(parsed.hostname)
@@ -34,8 +25,6 @@ def validate_node_uri(enode: str, require_ip: bool = False) -> None:
 
     if require_ip and ip in (ipaddress.ip_address('0.0.0.0'), ipaddress.ip_address('::')):
         raise ValidationError('A concrete IP address must be specified')
-
-    keys.PublicKey(decoded_username)
 
     try:
         # this property performs a check that the port is in range
