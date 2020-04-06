@@ -56,6 +56,8 @@ class Network(NetworkAPI):
 
         async with trio.open_nursery() as nursery:
             for neighbor in found_nodes:
+                if neighbor.node_id == self.client.local_node_id:
+                    continue
                 nursery.start_soon(self.verify_and_add, neighbor)
 
     async def verify_and_add(self, node: Node) -> None:
