@@ -9,10 +9,12 @@ from typing import (
     Dict,
     FrozenSet,
     Iterator,
+    KeysView,
     Mapping,
     NamedTuple,
     Optional,
     Set,
+    Tuple,
 )
 
 from eth_utils import encode_hex, to_tuple
@@ -69,19 +71,26 @@ def iter_furthest_keys(center_id: NodeID, keys: Collection[bytes]) -> Iterator[b
     yield from sorted(keys, key=sort_fn, reverse=True)
 
 
-class EphemeralDB(ContentDatabaseAPI):
+class BaseContentDB(ContentDatabaseAPI):
+    @property
+    def has_capacity(self) -> bool:
+        return self.capacity > 0
+
+
+class EphemeralDB(BaseContentDB):
     _db: Dict[bytes, bytes]
 
     def __init__(self, center_id: NodeID, capacity: int) -> None:
         self._db = {}
         self.center_id = center_id
         self.capacity = capacity
+        self.total_capacity = capacity
 
     def __len__(self) -> int:
         return len(self._db)
 
-    def keys(self) -> collections.KeysView:
-        return self._db.keys()
+    def keys(self) -> KeysView[bytes]:
+        return collections.KeysView(self._db)
 
     def _enforce_capacity(self) -> None:
         if self.capacity >= 0:
@@ -133,6 +142,7 @@ class EphemeralIndex(ContentIndexAPI):
         self._indices = {}
         self.center_id = center_id
         self.capacity = capacity
+        self.total_capacity = capacity
 
     def __len__(self) -> int:
         return sum(len(index) for index in self._indices.values())
@@ -185,13 +195,14 @@ class EphemeralIndex(ContentIndexAPI):
             self.capacity += 1
 
 
-class CacheDB(ContentDatabaseAPI):
+class CacheDB(BaseContentDB):
     _records: Deque[Content]
     _cache_db: Mapping[bytes, bytes]
     _counter: int
 
     def __init__(self, capacity: int) -> None:
         self.capacity = capacity
+        self.total_capacity = capacity
         self._records = collections.deque()
         self._counter = 0
         self._last_cached_at = -1
@@ -200,8 +211,8 @@ class CacheDB(ContentDatabaseAPI):
     def __len__(self) -> int:
         return len(self._records)
 
-    def keys(self) -> collections.KeysView:
-        return self.cache_db.keys()
+    def keys(self) -> KeysView[bytes]:
+        return collections.KeysView(self.cache_db)
 
     @property
     def cache_db(self) -> Mapping[bytes, bytes]:
@@ -216,7 +227,8 @@ class CacheDB(ContentDatabaseAPI):
     def _enforce_capacity(self) -> None:
         while self.capacity < 0:
             oldest_content = self._records.pop()
-            self.delete(oldest_content.key)
+            self._counter += 1
+            self.capacity += len(oldest_content.data)
 
     def _touch_record(self, content: Content) -> None:
         if content == self._records[0]:
@@ -271,6 +283,7 @@ class CacheIndex(ContentIndexAPI):
 
     def __init__(self, capacity: int) -> None:
         self.capacity = capacity
+        self.total_capacity = capacity
         self._records = collections.deque()
         self._counter = 0
         self._last_cached_at = -1
@@ -284,8 +297,9 @@ class CacheIndex(ContentIndexAPI):
             return
 
         while self.capacity < 0:
-            oldest_record = self._records.pop()
-            self.remove(oldest_record)
+            self._records.pop()
+            self._counter += 1
+            self.capacity += 1
 
     @property
     def cache_indices(self) -> Mapping[NodeID, FrozenSet[NodeID]]:
@@ -347,17 +361,6 @@ class ContentManager(ContentManagerAPI):
     """
     logger = logging.getLogger('alexandria.content_manager.ContentManager')
 
-    center_id: NodeID
-
-    durable_db: Mapping[bytes, bytes]
-    durable_index: Mapping[NodeID, FrozenSet[NodeID]]
-
-    ephemeral_db: ContentDatabaseAPI
-    ephemeral_index: ContentIndexAPI
-
-    cache_db: ContentDatabaseAPI
-    cache_index: ContentIndexAPI
-
     def __init__(self,
                  center_id: NodeID,
                  durable_db: Mapping[bytes, bytes],
@@ -394,9 +397,8 @@ class ContentManager(ContentManagerAPI):
         self.cache_db = CacheDB(capacity=self.config.cache_storage_size)
         self.cache_index = CacheIndex(capacity=self.config.cache_index_size)
 
-    @to_tuple
-    def iter_content_keys(self) -> collections.KeysView:
-        return collections.KeysView(itertools.chain(
+    def iter_content_keys(self) -> Tuple[bytes, ...]:
+        return tuple(itertools.chain(
             self.durable_db.keys(),
             self.ephemeral_db.keys(),
             self.cache_db.keys(),

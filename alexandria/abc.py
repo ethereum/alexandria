@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-import collections
 import ipaddress
 from typing import (
     AsyncContextManager,
@@ -10,6 +9,8 @@ from typing import (
     FrozenSet,
     Generic,
     Iterator,
+    KeysView,
+    Mapping,
     NamedTuple,
     Optional,
     Sequence,
@@ -457,6 +458,14 @@ class NetworkAPI(ABC):
     async def bond(self, node: Node) -> None:
         ...
 
+    @abstractmethod
+    async def locate(self, node: Node, *, key: bytes) -> Tuple[Node, ...]:
+        ...
+
+    @abstractmethod
+    async def retrieve(self, node: Node, *, key: bytes) -> bytes:
+        ...
+
 
 class ContentBundle(NamedTuple):
     key: bytes
@@ -478,8 +487,13 @@ class ContentDatabaseAPI(Sized):
     total_capacity: int
     capacity: int
 
+    @property
     @abstractmethod
-    def keys(self) -> collections.KeysView:
+    def has_capacity(self) -> bool:
+        ...
+
+    @abstractmethod
+    def keys(self) -> KeysView[bytes]:
         ...
 
     @abstractmethod
@@ -527,8 +541,19 @@ class ContentStats(NamedTuple):
 
 
 class ContentManagerAPI(ABC):
+    center_id: NodeID
+
+    durable_db: Mapping[bytes, bytes]
+    durable_index: Mapping[NodeID, FrozenSet[NodeID]]
+
+    ephemeral_db: ContentDatabaseAPI
+    ephemeral_index: ContentIndexAPI
+
+    cache_db: ContentDatabaseAPI
+    cache_index: ContentIndexAPI
+
     @abstractmethod
-    def iter_content_keys(self) -> collections.KeysView:
+    def iter_content_keys(self) -> Tuple[bytes, ...]:
         ...
 
     @abstractmethod

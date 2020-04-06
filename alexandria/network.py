@@ -37,6 +37,36 @@ class Network(NetworkAPI):
         self.endpoint_db = endpoint_db
         self.routing_table = routing_table
 
+    async def bond(self, node: Node) -> None:
+        """
+        Establish a session with the given node if one is not already present.
+
+        1. Ensure we can communicate with the node
+        2. Perform a lookup on the node of our own location in the neighborhood
+           to find the nodes that are closest to our node id.
+        """
+        self.logger.debug('Initiating bond with: %s', node)
+
+        distance = compute_log_distance(self.client.local_node_id, node.node_id)
+
+        found_nodes = await self.single_lookup(node, distance=distance)
+
+        self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
+        self.routing_table.update(node.node_id)
+
+        async with trio.open_nursery() as nursery:
+            for neighbor in found_nodes:
+                nursery.start_soon(self.verify_and_add, neighbor)
+
+    async def verify_and_add(self, node: Node) -> None:
+        """
+        Verify we can ping a node and then add it to our routing table and
+        endpoint database.
+        """
+        await self.client.ping(node)
+        self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
+        self.routing_table.update(node.node_id)
+
     async def single_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
         found_nodes = await self.client.find_nodes(node, distance=distance)
         return tuple(
@@ -46,7 +76,7 @@ class Network(NetworkAPI):
         )
 
     async def iterative_lookup(self, target_id: NodeID) -> Tuple[Node, ...]:
-        self.logger.info("Starting looking up @ %s", humanize_node_id(target_id))
+        self.logger.debug("Starting looking up @ %s", humanize_node_id(target_id))
 
         # tracks the nodes that have already been queried
         queried_node_ids: Set[NodeID] = set()
@@ -133,7 +163,7 @@ class Network(NetworkAPI):
             found_nodes,
             key=lambda node: compute_distance(self.client.local_node_id, node.node_id),
         ))
-        self.logger.info(
+        self.logger.debug(
             "Finished looking up %s in %d rounds: Found %d nodes after querying %d nodes",
             humanize_node_id(target_id),
             lookup_round_number,
@@ -141,15 +171,6 @@ class Network(NetworkAPI):
             len(queried_node_ids),
         )
         return sorted_found_nodes
-
-    async def verify_and_add(self, node: Node) -> None:
-        """
-        Verify we can ping a node and then add it to our routing table and
-        endpoint database.
-        """
-        await self.client.ping(node)
-        self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
-        self.routing_table.update(node.node_id)
 
     async def locate(self, node: Node, *, key: bytes) -> Tuple[Node, ...]:
         locations = await self.client.locate(node, key=key)
@@ -165,27 +186,6 @@ class Network(NetworkAPI):
             message.payload.data for message in chunks
         ))
         return data
-
-    async def bond(self, node: Node) -> None:
-        """
-        Establish a session with the given node if one is not already present.
-
-        1. Ensure we can communicate with the node
-        2. Perform a lookup on the node of our own location in the neighborhood
-           to find the nodes that are closest to our node id.
-        """
-        self.logger.debug('Initiating bond with: %s', node)
-
-        distance = compute_log_distance(self.client.local_node_id, node.node_id)
-
-        found_nodes = await self.single_lookup(node, distance=distance)
-
-        self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
-        self.routing_table.update(node.node_id)
-
-        async with trio.open_nursery() as nursery:
-            for neighbor in found_nodes:
-                nursery.start_soon(self.verify_and_add, neighbor)
 
 
 def iter_closest_nodes(target: NodeID,

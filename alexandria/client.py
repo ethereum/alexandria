@@ -294,7 +294,11 @@ class Client(Service, ClientAPI):
             responses = []
             total_messages = None
             while True:
-                response = await subscription.receive()
+                try:
+                    response = await subscription.receive()
+                except trio.EndOfChannel:
+                    break
+
                 if total_messages is None:
                     total_messages = response.payload.total
                 else:
@@ -387,16 +391,19 @@ class Client(Service, ClientAPI):
 
     async def _handle_inbound_datagrams(self, receive_channel: trio.abc.ReceiveChannel[Datagram],
                                         ) -> None:
-        async with trio.open_nursery() as nursery:
-            async with receive_channel:
-                async for datagram in receive_channel:
-                    packet = decode_packet(datagram.data)
-                    remote_node_id = recover_source_id_from_tag(packet.tag, self.local_node_id)
-                    remote_node = Node(remote_node_id, datagram.endpoint)
-                    session = await self._get_or_create_session(
-                        remote_node,
-                        is_initiator=False,
-                    )
+        try:
+            async with trio.open_nursery() as nursery:
+                async with receive_channel:
+                    async for datagram in receive_channel:
+                        packet = decode_packet(datagram.data)
+                        remote_node_id = recover_source_id_from_tag(packet.tag, self.local_node_id)
+                        remote_node = Node(remote_node_id, datagram.endpoint)
+                        session = await self._get_or_create_session(
+                            remote_node,
+                            is_initiator=False,
+                        )
 
-                    nursery.start_soon(session.handle_inbound_packet, packet)
-                    self.logger.debug('decoded datagram %s dispatched to %s', datagram, session)
+                        nursery.start_soon(session.handle_inbound_packet, packet)
+                        self.logger.debug('decoded datagram %s dispatched to %s', datagram, session)
+        except trio.BrokenResourceError:
+            pass

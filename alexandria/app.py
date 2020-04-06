@@ -1,5 +1,5 @@
 import logging
-from typing import Collection, Dict
+from typing import Collection, Mapping
 
 from async_service import Service
 from eth_keys import keys
@@ -21,7 +21,7 @@ class Application(Service):
     logger = logging.getLogger('alexandria.app.Application')
 
     client: ClientAPI
-    content_db: Dict[bytes, bytes]
+    local_content: Mapping[bytes, bytes]
     endpoint_db: EndpointDatabaseAPI
     routing_table: RoutingTableAPI
     config: KademliaConfig
@@ -30,7 +30,7 @@ class Application(Service):
                  bootnodes: Collection[Node],
                  private_key: keys.PrivateKey,
                  listen_on: Endpoint,
-                 content_db: Dict[bytes, bytes],
+                 local_content: Mapping[bytes, bytes],
                  config: KademliaConfig,
                  ) -> None:
         self.config = config
@@ -39,8 +39,9 @@ class Application(Service):
             listen_on=listen_on,
         )
         self.bootnodes = bootnodes
+        self._bonded = trio.Event()
         self.endpoint_db = MemoryEndpointDB()
-        self.content_db = content_db
+        self.local_content = local_content
         self.routing_table = RoutingTable(
             self.client.local_node_id,
             bucket_size=256,
@@ -52,7 +53,7 @@ class Application(Service):
         )
         self._kademlia = Kademlia(
             routing_table=self.routing_table,
-            content_db=self.content_db,
+            local_content=self.local_content,
             endpoint_db=self.endpoint_db,
             client=self.client,
             network=self.network,
@@ -64,9 +65,24 @@ class Application(Service):
             async with self.client.events.listening.subscribe():
                 self.manager.run_daemon_child_service(self.client)
 
-        await trio.sleep(0.1)
+        # TODO: hack: this gives the MessageDispatcher service enough time to
+        # be fully started
+        await trio.sleep(0.01)
 
         self.manager.run_task(self._bootstrap)
+
+        if self.bootnodes:
+            try:
+                with trio.fail_after(10):
+                    await self._bonded.wait()
+            except trio.TooSlowError:
+                self.logger.error(
+                    "Failed to bond with network: %s",
+                    self.client.local_node,
+                )
+                self.manager.cancel()
+                return
+
         self.manager.run_daemon_child_service(self._kademlia)
         self.manager.run_daemon_task(self._monitor_endpoints)
 
@@ -91,6 +107,7 @@ class Application(Service):
     async def _bond(self, node: Node) -> None:
         with trio.move_on_after(BOND_TIMEOUT):
             await self.network.bond(node)
+            self._bonded.set()
 
     async def _bootstrap(self) -> None:
         self.logger.info("Attempting to bond with %d bootnodes", len(self.bootnodes))

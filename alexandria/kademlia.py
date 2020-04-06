@@ -1,9 +1,9 @@
 import logging
 import secrets
-from typing import DefaultDict, Iterable, Mapping, NamedTuple, Set, Tuple
+from typing import Iterable, Mapping, NamedTuple, Optional, Tuple
 
 from async_service import Service
-from eth_utils import to_tuple
+from eth_utils import encode_hex, to_tuple
 from eth_utils.toolz import partition_all
 import trio
 
@@ -11,6 +11,7 @@ from alexandria._utils import every, humanize_node_id, content_key_to_node_id
 from alexandria.abc import (
     ClientAPI,
     ContentBundle,
+    ContentManagerAPI,
     EndpointDatabaseAPI,
     NetworkAPI,
     Node,
@@ -19,6 +20,7 @@ from alexandria.abc import (
 from alexandria.constants import PING_TIMEOUT
 from alexandria.content_manager import StorageConfig, ContentManager
 from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
+from alexandria.routing_table import compute_distance
 from alexandria.typing import NodeID
 
 
@@ -46,11 +48,11 @@ class KademliaConfig(NamedTuple):
 
 class Kademlia(Service):
     logger = logging.getLogger('alexandria.kademlia.Kademlia')
-    content_index: DefaultDict[bytes, Set[NodeID]]
 
     client: ClientAPI
     network: NetworkAPI
     routing_table: RoutingTableAPI
+    content_manager: ContentManagerAPI
 
     def __init__(self,
                  routing_table: RoutingTableAPI,
@@ -64,21 +66,20 @@ class Kademlia(Service):
             config = KademliaConfig()
         self.config = config
 
-        self.content_db = ContentManager(
+        self.endpoint_db = endpoint_db
+        self.routing_table = routing_table
+        self.client = client
+        self.network = network
+        self.content_manager = ContentManager(
             center_id=self.client.local_node_id,
             durable_db=local_content,
             config=config.storage_config,
         )
 
-        self.endpoint_db = endpoint_db
-        self.routing_table = routing_table
-        self.client = client
-        self.network = network
-
         (
             self._inbound_content_send_channel,
             self._inbound_content_receive_channel,
-        ) = trio.open_memory_channel[ContentBundle](256)
+        ) = trio.open_memory_channel[Tuple[Node, bytes]](256)
 
     async def run(self) -> None:
         self.manager.run_daemon_task(self._periodic_report_routing_table_status)
@@ -258,35 +259,73 @@ class Kademlia(Service):
                             )
 
     async def _handle_content_ingestion(self,
-                                        receive_channel: trio.abc.ReceiveChannel[ContentBundle],
+                                        receive_channel: trio.abc.ReceiveChannel[Tuple[Node, bytes]],  # noqa: E501
                                         ) -> None:
-        limiter = trio.CapacityLimiter(1)
-        async with trio.open_nursery() as nursery:
-            async with receive_channel:
-                async for bundle in receive_channel:
-                    nursery.start_soon(trio.to_thread.run_sync(
-                        self.content_manager.ingest_content,
-                        bundle,
-                        limiter=limiter,
-                    ))
+        async with receive_channel:
+            async for node, key in receive_channel:
+                data: Optional[bytes]
+                if self._check_interest_in_ephemeral_content(key):
+                    try:
+                        with trio.fail_after(5):
+                            data = await self.network.retrieve(node, key=key)
+                            self.logger.debug(
+                                'Successfully retrieved content: %s@%s',
+                                encode_hex(key),
+                                node,
+                            )
+                    except trio.TooSlowError:
+                        self.logger.debug(
+                            'Content retrieval timed out: %s@%s',
+                            encode_hex(key),
+                            node,
+                        )
+                        data = None
+                else:
+                    self.logger.debug('Not interested in content: %s@%s', encode_hex(key), node)
+                    data = None
+                bundle = ContentBundle(
+                    key=key,
+                    data=data,
+                    node_id=node.node_id,
+                )
+                await trio.to_thread.run_sync(
+                    self.content_manager.ingest_content,
+                    bundle,
+                )
+
+    def _check_interest_in_ephemeral_content(self, key: bytes) -> bool:
+        if self.content_manager.ephemeral_db.has_capacity:
+            return True
+        content_id = content_key_to_node_id(key)
+        content_distance = compute_distance(content_id, self.client.local_node_id)
+        furthest_key = sorted(
+            self.content_manager.ephemeral_db.keys(),
+            key=lambda key: compute_distance(self.client.local_node_id, content_key_to_node_id(key)),  # noqa: E501
+            reverse=True,
+        )[0]
+        furthest_content_id = content_key_to_node_id(furthest_key)
+        furthest_distance = compute_distance(furthest_content_id, self.client.local_node_id)
+        return content_distance < furthest_distance
 
     async def _handle_advertise_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Advertise) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
                 payload = request.payload
-                node_id, ip_address, port = payload.node
-                # TODO: ping the node to ensure it is available (unless it is the sending node).
-                # TODO: verify content is actually available
-                # TODO: check distance of key and store conditionally
-                self.content_index[payload.key].add(payload.node)
                 await self.client.send_ack(request.node, request_id=payload.request_id)
-                with trio.fail_after(1):
-                    await self._inbound_content_send_channel.send(ContentBundle(
-                        key=payload.key,
-                        data=None,
-                        node_id=request.node.node_id,
-                    ))
+
+                node = Node.from_payload(payload.node)
+
+                # Queue the content to be ingested by the content manager
+                try:
+                    self._inbound_content_send_channel.send_nowait((node, payload.key))
+                except trio.WouldBlock:
+                    self.logger.error(
+                        "Content processing channel is full.  Discarding "
+                        "advertised content: %s@%s",
+                        encode_hex(payload.key),
+                        request.node,
+                    )
 
     async def _handle_locate_requests(self) -> None:
         with self.client.message_dispatcher.subscribe(Locate) as subscription:
