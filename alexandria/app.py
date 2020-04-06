@@ -21,7 +21,7 @@ from alexandria.network import Network
 from alexandria.routing_table import RoutingTable
 
 
-BOND_TIMEOUT = 10
+BOND_TIMEOUT = 5
 
 
 class Application(Service):
@@ -100,6 +100,15 @@ class Application(Service):
                 )
                 self.endpoint_db.set_endpoint(session.remote_node_id, session.remote_endpoint)
                 self.routing_table.update(session.remote_node_id)
+
+    async def _monitor_handshake_timeouts(self) -> None:
+        async with self.client.events.new_session.subscription() as subscription:
+            while self.manager.is_running:
+                session = await subscription.receive()
+                await trio.sleep(BOND_TIMEOUT)
+                if not session.is_handshake_complete:
+                    self.logger.info("Detected timed out handshake: %s", session)
+                    self.client.pool.remove_session(session.remote_node_id)
 
     async def _bond(self, node: Node) -> None:
         self.logger.debug('Attempting bond with %s', node)
