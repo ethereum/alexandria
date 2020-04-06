@@ -46,7 +46,10 @@ class Application(Service):
             private_key=private_key,
             listen_on=listen_on,
         )
-        self.bootnodes = bootnodes
+        self.bootnodes = tuple(
+            node for node in bootnodes
+            if node.node_id != self.client.local_node_id
+        )
         self._bonded = trio.Event()
         self.endpoint_db = MemoryEndpointDB()
         self.local_content = local_content
@@ -122,6 +125,4 @@ class Application(Service):
 
         async with trio.open_nursery() as nursery:
             for node in self.bootnodes:
-                if node.node_id == self.client.local_node_id:
-                    continue
                 nursery.start_soon(self._bond, node)
