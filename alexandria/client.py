@@ -12,6 +12,7 @@ from alexandria._utils import (
     public_key_to_node_id,
     humanize_node_id,
     split_data_to_chunks,
+    every,
 )
 from alexandria.abc import (
     ClientAPI,
@@ -23,7 +24,13 @@ from alexandria.abc import (
     SessionAPI,
     TPayload,
 )
-from alexandria.constants import CHUNK_MAX_SIZE, NODES_PER_PAYLOAD
+from alexandria.constants import (
+    CHUNK_MAX_SIZE,
+    NODES_PER_PAYLOAD,
+    HANDSHAKE_TIMEOUT,
+    SESSION_IDLE_TIMEOUT,
+    PING_TIMEOUT,
+)
 from alexandria.datagrams import DatagramListener
 from alexandria.exceptions import SessionNotFound, DecryptionError, CorruptSession
 from alexandria.events import Events
@@ -336,7 +343,8 @@ class Client(Service, ClientAPI):
                 node,
                 is_initiator=is_initiator,
             )
-            await self.events.new_session.trigger(session)
+            await self.events.session_created.trigger(session)
+            self.manager.run_task(self._monitor_handshake_timeout, session)
 
         return session
 
@@ -370,6 +378,7 @@ class Client(Service, ClientAPI):
                 self._handle_outbound_packets,
                 self._outbound_packet_receive_channel,
             )
+            self.manager.run_daemon_task(self._periodically_ping_sessions)
             self.logger.info(
                 'Client running: %s@%s',
                 humanize_node_id(self.local_node_id),
@@ -378,6 +387,24 @@ class Client(Service, ClientAPI):
 
             self._ready.set()
             await self.manager.wait_finished()
+
+    async def _periodically_ping_sessions(self) -> None:
+        async for _ in every(SESSION_IDLE_TIMEOUT):
+            for session in self.pool.get_idle_sesssions():
+                with trio.move_on_after(PING_TIMEOUT) as scope:
+                    await self.ping(session.remote_node)
+
+                if scope.cancelled_caught:
+                    self.logger.debug('Detected unresponsive idle session: %s', session)
+                    self.pool.remove_session(session.remote_node_id)
+                    await self.events.session_idle.trigger(session)
+
+    async def _monitor_handshake_timeout(self, session: SessionAPI) -> None:
+        await trio.sleep(HANDSHAKE_TIMEOUT)
+        if not session.is_handshake_complete:
+            self.logger.info("Detected timed out handshake: %s", session)
+            self.pool.remove_session(session.remote_node_id)
+            await self.events.handshake_timeout.trigger(session)
 
     async def _handle_outbound_messages(self,
                                         receive_channel: trio.abc.ReceiveChannel[MessageAPI[sedes.Serializable]],  # noqa: E501

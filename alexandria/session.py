@@ -1,6 +1,7 @@
 import enum
 import logging
 import secrets
+import time
 from typing import Tuple
 
 from eth_keys import keys
@@ -70,6 +71,8 @@ class BaseSession(SessionAPI):
         # TODO
         self._outbound_packet_send_channel = outbound_packet_send_channel
         self._inbound_message_send_channel = inbound_message_send_channel
+
+        self.last_message_at = 0.0
 
     def __str__(self) -> str:
         if self.is_initiator:
@@ -175,6 +178,8 @@ class SessionInitiator(BaseSession):
     # Packet API
     #
     async def handle_inbound_packet(self, packet: PacketAPI) -> None:
+        self.last_message_at = time.monotonic()
+
         if self.is_handshake_complete:
             if isinstance(packet, MessagePacket):
                 payload = packet.decrypt_payload(self._session_keys.decryption_key)
@@ -335,6 +340,8 @@ class SessionRecipient(BaseSession):
     # Packet API
     #
     async def handle_inbound_packet(self, packet: PacketAPI) -> None:
+        self.last_message_at = time.monotonic()
+
         if self.is_handshake_complete:
             if isinstance(packet, MessagePacket):
                 payload = packet.decrypt_payload(self._session_keys.decryption_key)
@@ -383,11 +390,11 @@ class SessionRecipient(BaseSession):
             raise Exception("Invalid state")
 
     async def receive_handshake_initiation(self, packet: MessagePacket) -> None:
-        self.logger.debug('%s: received handshake initiation')
+        self.logger.debug('%s: received handshake initiation', self)
         self._status = SessionStatus.DURING
 
     async def send_handshake_response(self, initiation_packet: MessagePacket) -> None:
-        self.logger.debug('%s: sending handshake response')
+        self.logger.debug('%s: sending handshake response', self)
         magic = compute_handshake_response_magic(self.remote_node_id)
         self.handshake_response_packet = HandshakeResponse(
             tag=self.tag,

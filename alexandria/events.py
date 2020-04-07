@@ -79,11 +79,10 @@ class Event(EventAPI[TEventPayload]):
         self._channels = set()
 
     async def trigger(self, payload: TEventPayload) -> None:
-        self.logger.debug('Triggering event: %s', self.name)
+        self.logger.debug('Triggering event: %s(%s)', self.name, payload)
         async with self._lock:
             for send_channel in self._channels:
                 await send_channel.send(payload)
-        self.logger.debug('Finished triggering event: %s', self.name)
 
     def subscribe(self) -> EventSubscriptionAPI[TEventPayload]:
         send_channel, receive_channel = trio.open_memory_channel[TEventPayload](256)
@@ -99,6 +98,10 @@ class Event(EventAPI[TEventPayload]):
 
 class Events(EventsAPI):
     def __init__(self) -> None:
-        self.new_session: Event[SessionAPI] = Event('NEW_SESSION')
-        self.handshake_complete: Event[SessionAPI] = Event('HANDSHAKE_COMPLETE')
         self.listening: Event[Endpoint] = Event('LISTENING')
+
+        self.session_created: Event[SessionAPI] = Event('NEW_SESSION')
+        self.session_idle: Event[SessionAPI] = Event('IDLE_SESSION')
+
+        self.handshake_complete: Event[SessionAPI] = Event('HANDSHAKE_COMPLETE')
+        self.handshake_timeout: Event[SessionAPI] = Event('HANDSHAKE_TIMEOUT')

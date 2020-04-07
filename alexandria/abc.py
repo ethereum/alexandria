@@ -183,6 +183,7 @@ class SessionAPI(ABC):
     remote_endpoint: Endpoint
 
     is_initiator: bool
+    last_message_at: float
 
     @abstractmethod
     def __init__(self,
@@ -238,6 +239,10 @@ class SessionAPI(ABC):
 
 
 class PoolAPI(ABC):
+    @abstractmethod
+    def get_idle_sesssions(self) -> Tuple[SessionAPI, ...]:
+        ...
+
     @abstractmethod
     def has_session(self, remote_node_id: NodeID) -> bool:
         ...
@@ -296,9 +301,13 @@ class EventAPI(Generic[TEventPayload]):
 
 
 class EventsAPI(ABC):
-    new_session: EventAPI[SessionAPI]
     listening: EventAPI[Endpoint]
+
+    session_created: EventAPI[SessionAPI]
+    session_idle: EventAPI[SessionAPI]
+
     handshake_complete: EventAPI[SessionAPI]
+    handshake_timeout: EventAPI[SessionAPI]
 
 
 class MessageDispatcherAPI(ServiceAPI):

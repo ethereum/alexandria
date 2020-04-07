@@ -1,5 +1,6 @@
 import logging
-from typing import Dict
+import time
+from typing import Dict, Tuple
 
 from eth_keys import keys
 from ssz import sedes
@@ -14,6 +15,7 @@ from alexandria.abc import (
     PoolAPI,
     SessionAPI,
 )
+from alexandria.constants import SESSION_IDLE_TIMEOUT
 from alexandria.exceptions import SessionNotFound, DuplicateSession
 from alexandria.session import SessionInitiator, SessionRecipient
 from alexandria.typing import NodeID
@@ -38,6 +40,13 @@ class Pool(PoolAPI):
         self._events = events
         self._outbound_packet_send_channel = outbound_packet_send_channel
         self._inbound_message_send_channel = inbound_message_send_channel
+
+    def get_idle_sesssions(self) -> Tuple[SessionAPI, ...]:
+        timed_out_at = time.monotonic() - SESSION_IDLE_TIMEOUT
+        return tuple(
+            session for session in self._sessions.values()
+            if session.last_message_at <= timed_out_at
+        )
 
     def remove_session(self, remote_node_id: NodeID) -> None:
         if remote_node_id in self._sessions:

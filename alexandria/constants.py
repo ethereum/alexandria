@@ -70,3 +70,7 @@ KADEMLIA_PING_INTERVAL = 30  # interval of outgoing pings sent to maintain the r
 KADEMLIA_LOOKUP_INTERVAL = 60  # intervals between lookups
 KADEMLIA_ANNOUNCE_INTERVAL = 600  # 10 minutes
 KADEMLIA_ANNOUNCE_CONCURRENCY = 3
+
+HANDSHAKE_TIMEOUT = 5
+
+SESSION_IDLE_TIMEOUT = 60

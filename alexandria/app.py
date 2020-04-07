@@ -102,15 +102,6 @@ class Application(Service):
                 self.endpoint_db.set_endpoint(session.remote_node_id, session.remote_endpoint)
                 self.routing_table.update(session.remote_node_id)
 
-    async def _monitor_handshake_timeouts(self) -> None:
-        async with self.client.events.new_session.subscription() as subscription:
-            while self.manager.is_running:
-                session = await subscription.receive()
-                await trio.sleep(BOND_TIMEOUT)
-                if not session.is_handshake_complete:
-                    self.logger.info("Detected timed out handshake: %s", session)
-                    self.client.pool.remove_session(session.remote_node_id)
-
     async def _bond(self, node: Node) -> None:
         self.logger.debug('Attempting bond with %s', node)
         with trio.move_on_after(BOND_TIMEOUT):
@@ -123,6 +114,7 @@ class Application(Service):
                 self.logger.info("Attempting to bond with %d bootnodes", len(self.bootnodes))
 
                 if not self.routing_table.is_empty:
+                    self._bonded.set()
                     break
 
                 for node in self.bootnodes:
