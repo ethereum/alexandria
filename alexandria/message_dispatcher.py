@@ -129,17 +129,19 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
         key = (node_id, request_id)
         self._reserved_request_ids.add(key)
 
-        self.manager.run_task(
-            self._manage_request_response,
-            request,
-            response_payload_type,
-            send_channel,
-        )
-        try:
-            async with receive_channel:
-                yield receive_channel
-        finally:
-            self._reserved_request_ids.remove(key)
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(
+                self._manage_request_response,
+                request,
+                response_payload_type,
+                send_channel,
+            )
+            try:
+                async with receive_channel:
+                    yield receive_channel
+            finally:
+                self._reserved_request_ids.remove(key)
+                nursery.cancel_scope.cancel()
 
     async def _manage_request_response(self,
                                        request: MessageAPI[sedes.Serializable],
