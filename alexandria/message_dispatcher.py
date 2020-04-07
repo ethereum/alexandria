@@ -149,7 +149,7 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
         node_id = request.node.node_id
         request_id = request.payload.request_id
 
-        with trio.fail_after(60):
+        with trio.move_on_after(10):
             async with self.subscribe(response_payload_type) as subscription:
                 self.logger.debug(
                     "Sending request with request id %d",

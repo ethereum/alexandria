@@ -20,7 +20,7 @@ from alexandria.abc import (
     RoutingTableAPI,
 )
 from alexandria.config import KademliaConfig
-from alexandria.constants import PING_TIMEOUT
+from alexandria.constants import PING_TIMEOUT, ANNOUNCE_TIMEOUT
 from alexandria.content_manager import ContentManager
 from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
 from alexandria.routing_table import compute_distance
@@ -165,15 +165,6 @@ class Kademlia(Service, KademliaAPI):
             endpoint = self.endpoint_db.get_endpoint(node_id)
             yield Node(node_id, endpoint)
 
-    async def _verify_node(self, node: Node) -> None:
-        with trio.move_on_after(PING_TIMEOUT) as scope:
-            await self.network.verify_and_add(node)
-
-        if scope.cancelled_caught:
-            self.logger.debug('node verification timed out: %s', node)
-        else:
-            self.logger.debug('node verification succeeded: %s', node)
-
     async def _lookup_occasionally(self) -> None:
         async with trio.open_nursery() as nursery:
             async for _ in every(self.config.LOOKUP_INTERVAL):  # noqa: F841
@@ -191,7 +182,7 @@ class Kademlia(Service, KademliaAPI):
                 for node in found_nodes:
                     if node.node_id == self.client.local_node_id:
                         continue
-                    nursery.start_soon(self._verify_node, node)
+                    nursery.start_soon(self.network.verify_and_add, node)
 
     async def _ping_occasionally(self) -> None:
         async for _ in every(self.config.PING_INTERVAL):  # noqa: F841
@@ -230,7 +221,8 @@ class Kademlia(Service, KademliaAPI):
     async def _periodically_announce_content(self) -> None:
         async for _ in every(self.config.ANNOUNCE_INTERVAL, initial_delay=10):  # noqa: F841
             for key in self.content_manager.iter_content_keys():
-                await self.network.announce(key, self.client.local_node)
+                with trio.move_on_after(ANNOUNCE_TIMEOUT):
+                    await self.network.announce(key, self.client.local_node)
 
     async def _handle_content_ingestion(self,
                                         receive_channel: trio.abc.ReceiveChannel[Tuple[Node, bytes]],  # noqa: E501

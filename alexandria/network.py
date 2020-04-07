@@ -21,6 +21,7 @@ from alexandria.constants import (
     FIND_NODES_TIMEOUT,
     ADVERTISE_TIMEOUT,
     KADEMLIA_ANNOUNCE_CONCURRENCY,
+    PING_TIMEOUT,
 )
 from alexandria.routing_table import compute_log_distance, compute_distance
 from alexandria.typing import NodeID
@@ -71,9 +72,15 @@ class Network(NetworkAPI):
         """
         if node.node_id == self.client.local_node_id:
             raise Exception("Cannot verify self")
-        await self.client.ping(node)
-        self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
-        self.routing_table.update(node.node_id)
+        try:
+            with trio.fail_after(PING_TIMEOUT):
+                await self.client.ping(node)
+        except trio.TooSlowError:
+            self.logger.debug('Failed to verify node: %s', node)
+        else:
+            self.logger.debug('Verified node: %s', node)
+            self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
+            self.routing_table.update(node.node_id)
 
     async def single_lookup(self, node: Node, *, distance: int) -> Tuple[Node, ...]:
         found_nodes = await self.client.find_nodes(node, distance=distance)
