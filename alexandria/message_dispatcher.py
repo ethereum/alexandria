@@ -149,7 +149,7 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
         node_id = request.node.node_id
         request_id = request.payload.request_id
 
-        with trio.move_on_after(10):
+        with trio.move_on_after(60) as scope:
             async with self.subscribe(response_payload_type) as subscription:
                 self.logger.debug(
                     "Sending request with request id %d",
@@ -165,3 +165,9 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
                             continue
                         else:
                             await send_channel.send(response)
+        if scope.cancelled_caught:
+            self.logger.warning(
+                "Abandoned request response monitor: request=%s payload_type=%s",
+                request,
+                response_payload_type,
+            )
