@@ -203,10 +203,6 @@ class SessionAPI(ABC):
     async def handle_inbound_packet(self, packet: PacketAPI) -> None:
         ...
 
-    @abstractmethod
-    async def handle_outbound_packet(self, packet: PacketAPI) -> None:
-        ...
-
     @property
     @abstractmethod
     def is_before_handshake(self) -> bool:

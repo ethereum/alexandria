@@ -65,6 +65,8 @@ class Network(NetworkAPI):
         Verify we can ping a node and then add it to our routing table and
         endpoint database.
         """
+        if node.node_id == self.client.local_node_id:
+            raise Exception("Cannot verify self")
         await self.client.ping(node)
         self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
         self.routing_table.update(node.node_id)

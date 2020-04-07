@@ -74,14 +74,13 @@ class Application(Service):
     async def run(self) -> None:
         self.manager.run_daemon_child_service(self.client)
         self.manager.run_daemon_task(self._monitor_endpoints)
+        self.manager.run_daemon_child_service(self.kademlia)
 
         with trio.fail_after(5):
             await self.client.wait_ready()
         self.manager.run_task(self._bootstrap)
         await self._bonded.wait()
         self.logger.info("Bonding Successful!!!")
-
-        self.manager.run_daemon_child_service(self.kademlia)
 
         await self.manager.wait_finished()
 

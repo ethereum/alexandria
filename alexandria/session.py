@@ -224,16 +224,6 @@ class SessionInitiator(BaseSession):
         else:
             raise Exception("Invalid state")
 
-    async def handle_outbound_packet(self, packet: PacketAPI) -> None:
-        if self.is_handshake_complete:
-            raise NotImplementedError
-        elif self.is_before_handshake:
-            raise NotImplementedError
-        elif self.is_during_handshake:
-            raise NotImplementedError
-        else:
-            raise Exception("Invalid state")
-
     async def send_handshake_initiation(self) -> None:
         self._status = SessionStatus.DURING
         self._initiating_packet = MessagePacket(
@@ -379,16 +369,6 @@ class SessionRecipient(BaseSession):
                 await self._events.handshake_complete.trigger(self)
             else:
                 self._inbound_packet_buffer_channels[0].send_nowait(packet)
-        else:
-            raise Exception("Invalid state")
-
-    async def handle_outbound_packet(self, packet: PacketAPI) -> None:
-        if self.is_handshake_complete:
-            raise NotImplementedError
-        elif self.is_before_handshake:
-            raise NotImplementedError
-        elif self.is_during_handshake:
-            raise NotImplementedError
         else:
             raise Exception("Invalid state")
 
