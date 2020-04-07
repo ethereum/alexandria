@@ -18,7 +18,7 @@ from alexandria.abc import (
     SessionAPI,
     SessionKeys,
 )
-from alexandria.exceptions import HandshakeFailure, DecryptionError
+from alexandria.exceptions import CorruptSession, HandshakeFailure, DecryptionError
 from alexandria.handshake import (
     compute_session_keys,
     create_id_nonce_signature,
@@ -210,7 +210,9 @@ class SessionInitiator(BaseSession):
                     packet,
                 )
             else:
-                self._inbound_packet_buffer_channels[0].send_nowait(packet)
+                raise CorruptSession(
+                    f"Suspected corrupted session. Got {packet} packet during handshake initiation."
+                )
         else:
             raise Exception("Invalid state")
 

@@ -18,5 +18,9 @@ class DuplicateSession(AlexandriaError):
     pass
 
 
+class CorruptSession(AlexandriaError):
+    pass
+
+
 class ContentNotFound(AlexandriaError):
     pass

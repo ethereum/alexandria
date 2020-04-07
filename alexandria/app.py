@@ -79,6 +79,7 @@ class Application(Service):
         await self.client.wait_ready()
         self.manager.run_task(self._bootstrap)
         await self._bonded.wait()
+        self.logger.info("Bonding Successful!!!")
 
         self.manager.run_daemon_task(self._monitor_endpoints)
         self.manager.run_daemon_child_service(self.kademlia)

@@ -25,7 +25,7 @@ from alexandria.abc import (
 )
 from alexandria.constants import CHUNK_MAX_SIZE, NODES_PER_PAYLOAD
 from alexandria.datagrams import DatagramListener
-from alexandria.exceptions import SessionNotFound, DecryptionError
+from alexandria.exceptions import SessionNotFound, DecryptionError, CorruptSession
 from alexandria.events import Events
 from alexandria.packets import decode_packet
 from alexandria.pool import Pool
@@ -411,7 +411,7 @@ class Client(Service, ClientAPI):
 
         try:
             await session.handle_inbound_packet(packet)
-        except DecryptionError:
+        except (DecryptionError, CorruptSession):
             self.pool.remove_session(session.remote_node_id)
             self.logger.debug('Removed defunkt session: %s', session)
 
