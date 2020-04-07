@@ -148,6 +148,8 @@ class Network(NetworkAPI):
                 queried_node_ids.update(nodes_to_query)
                 async with trio.open_nursery() as nursery:
                     for peer_id in nodes_to_query:
+                        if peer_id == self.client.local_node_id:
+                            continue
                         for endpoint in get_endpoints(peer_id):
                             nursery.start_soon(do_lookup, Node(peer_id, endpoint))
             else:

@@ -188,6 +188,8 @@ class Kademlia(Service, KademliaAPI):
                     len(found_nodes),
                 )
                 for node in found_nodes:
+                    if node.node_id == self.client.local_node_id:
+                        continue
                     nursery.start_soon(self._verify_node, node)
 
     async def _ping_occasionally(self) -> None:
