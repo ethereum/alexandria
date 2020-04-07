@@ -402,9 +402,9 @@ class Client(Service, ClientAPI):
     async def _monitor_handshake_timeout(self, session: SessionAPI) -> None:
         await trio.sleep(HANDSHAKE_TIMEOUT)
         if not session.is_handshake_complete:
-            self.logger.info("Detected timed out handshake: %s", session)
-            self.pool.remove_session(session.session_id)
-            await self.events.handshake_timeout.trigger(session)
+            if self.pool.remove_session(session.session_id):
+                self.logger.info("Detected timed out handshake: %s", session)
+                await self.events.handshake_timeout.trigger(session)
 
     async def _handle_outbound_messages(self,
                                         receive_channel: trio.abc.ReceiveChannel[MessageAPI[sedes.Serializable]],  # noqa: E501

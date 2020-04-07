@@ -49,7 +49,7 @@ class Pool(PoolAPI):
             if session.last_message_at <= timed_out_at
         )
 
-    def remove_session(self, session_id: uuid.UUID) -> None:
+    def remove_session(self, session_id: uuid.UUID) -> bool:
         to_remove = {
             session for session
             in self._sessions.values()
@@ -57,6 +57,7 @@ class Pool(PoolAPI):
         }
         for session in to_remove:
             self._sessions.pop(session.remote_node_id)
+        return bool(to_remove)
 
     def has_session(self, remote_node_id: NodeID) -> bool:
         return remote_node_id in self._sessions

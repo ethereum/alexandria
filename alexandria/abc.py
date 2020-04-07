@@ -259,7 +259,7 @@ class PoolAPI(ABC):
         ...
 
     @abstractmethod
-    def remove_session(self, session_id: uuid.UUID) -> None:
+    def remove_session(self, session_id: uuid.UUID) -> bool:
         ...
 
 
