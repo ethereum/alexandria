@@ -186,7 +186,7 @@ class SessionAPI(ABC):
     is_initiator: bool
     last_message_at: float
 
-    session_id = uuid.UUID
+    session_id: uuid.UUID
 
     @abstractmethod
     def __init__(self,
@@ -443,6 +443,13 @@ class RoutingTableStats(NamedTuple):
     num_in_replacement_cache: int
 
 
+class BucketInfo(NamedTuple):
+    idx: int
+    is_full: bool
+    nodes: Tuple[NodeID, ...]
+    replacement_cache: Tuple[NodeID, ...]
+
+
 class RoutingTableAPI(Collection[NodeID]):
     center_node_id: NodeID
     bucket_size: int
@@ -456,6 +463,10 @@ class RoutingTableAPI(Collection[NodeID]):
 
     @abstractmethod
     def get_stats(self) -> RoutingTableStats:
+        ...
+
+    @abstractmethod
+    def get_bucket_info(self, index: int) -> BucketInfo:
         ...
 
     @abstractmethod
@@ -490,7 +501,7 @@ class RoutingTableAPI(Collection[NodeID]):
 
 class NetworkAPI(ABC):
     @abstractmethod
-    async def single_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
+    async def single_lookup(self, node: Node, *, distance: int) -> Tuple[Node, ...]:
         ...
 
     @abstractmethod
@@ -503,6 +514,10 @@ class NetworkAPI(ABC):
 
     @abstractmethod
     async def bond(self, node: Node) -> None:
+        ...
+
+    @abstractmethod
+    async def announce(self, key: bytes, who: Node) -> None:
         ...
 
     @abstractmethod
@@ -528,6 +543,24 @@ class Location(NamedTuple):
 class Content(NamedTuple):
     key: bytes
     data: bytes
+
+
+class DurableDatabaseAPI(Sized):
+    @abstractmethod
+    def keys(self) -> KeysView[bytes]:
+        ...
+
+    @abstractmethod
+    def get(self, key: bytes) -> bytes:
+        ...
+
+    @abstractmethod
+    def set(self, key: bytes, data: bytes) -> None:
+        ...
+
+    @abstractmethod
+    def delete(self, key: bytes) -> None:
+        ...
 
 
 class ContentDatabaseAPI(Sized):
@@ -590,7 +623,7 @@ class ContentStats(NamedTuple):
 class ContentManagerAPI(ABC):
     center_id: NodeID
 
-    durable_db: Mapping[bytes, bytes]
+    durable_db: DurableDatabaseAPI
     durable_index: Mapping[NodeID, FrozenSet[NodeID]]
 
     ephemeral_db: ContentDatabaseAPI
@@ -598,6 +631,10 @@ class ContentManagerAPI(ABC):
 
     cache_db: ContentDatabaseAPI
     cache_index: ContentIndexAPI
+
+    @abstractmethod
+    def rebuild_durable_index(self) -> None:
+        ...
 
     @abstractmethod
     def iter_content_keys(self) -> Tuple[bytes, ...]:

@@ -4,11 +4,11 @@ import logging
 import math
 from typing import DefaultDict, Iterable, Optional, Sequence, Set, Tuple
 
-from eth_utils import to_tuple
-from eth_utils.toolz import take
+from eth_utils import to_tuple, encode_hex
+from eth_utils.toolz import take, partition_all
 import trio
 
-from alexandria._utils import humanize_node_id
+from alexandria._utils import humanize_node_id, content_key_to_node_id
 from alexandria.abc import (
     ClientAPI,
     Endpoint,
@@ -17,7 +17,11 @@ from alexandria.abc import (
     Node,
     RoutingTableAPI,
 )
-from alexandria.constants import FIND_NODES_TIMEOUT
+from alexandria.constants import (
+    FIND_NODES_TIMEOUT,
+    ADVERTISE_TIMEOUT,
+    KADEMLIA_ANNOUNCE_CONCURRENCY,
+)
 from alexandria.routing_table import compute_log_distance, compute_distance
 from alexandria.typing import NodeID
 
@@ -71,7 +75,7 @@ class Network(NetworkAPI):
         self.endpoint_db.set_endpoint(node.node_id, node.endpoint)
         self.routing_table.update(node.node_id)
 
-    async def single_lookup(self, node: Node, distance: int) -> Tuple[Node, ...]:
+    async def single_lookup(self, node: Node, *, distance: int) -> Tuple[Node, ...]:
         found_nodes = await self.client.find_nodes(node, distance=distance)
         return tuple(
             Node.from_payload(node_as_payload)
@@ -177,6 +181,27 @@ class Network(NetworkAPI):
             len(queried_node_ids),
         )
         return sorted_found_nodes
+
+    async def announce(self, key: bytes, who: Node) -> None:
+        self.logger.debug("Starting announce for: %s", encode_hex(key))
+        content_id = content_key_to_node_id(key)
+        found_nodes = await self.iterative_lookup(content_id)
+
+        async def do_advertise(node: Node) -> None:
+            with trio.move_on_after(ADVERTISE_TIMEOUT):
+                await self.client.advertise(node, key=key, who=who)
+
+        for batch in partition_all(KADEMLIA_ANNOUNCE_CONCURRENCY, found_nodes):
+            async with trio.open_nursery() as nursery:
+                for node in batch:
+                    if node.node_id == self.client.local_node_id:
+                        continue
+                    nursery.start_soon(do_advertise, node)
+        self.logger.debug(
+            "Finished announce to %d peers for: %s",
+            len(found_nodes),
+            encode_hex(key),
+        )
 
     async def locate(self, node: Node, *, key: bytes) -> Tuple[Node, ...]:
         locations = await self.client.locate(node, key=key)

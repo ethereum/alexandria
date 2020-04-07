@@ -10,10 +10,11 @@ from eth_keys import keys
 from eth_utils import encode_hex, decode_hex
 
 from alexandria._utils import sha256
-from alexandria.abc import Endpoint, Node
+from alexandria.abc import Endpoint, Node, DurableDatabaseAPI
 from alexandria.app import Application
 from alexandria.cli_parser import parser
 from alexandria.config import DEFAULT_CONFIG, KademliaConfig
+from alexandria.durable_db import DurableDB
 from alexandria.logging import setup_logging
 from alexandria.rpc import RPCServer
 from alexandria.xdg import get_xdg_alexandria_root
@@ -37,7 +38,7 @@ class Alexandria(Service):
                  private_key: keys.PrivateKey,
                  listen_on: Endpoint,
                  bootnodes: Collection[Node],
-                 local_content: Mapping[bytes, bytes],
+                 durable_db: DurableDatabaseAPI,
                  kademlia_config: KademliaConfig,
                  ipc_path: pathlib.Path,
                  ) -> None:
@@ -45,7 +46,7 @@ class Alexandria(Service):
             bootnodes=bootnodes,
             private_key=private_key,
             listen_on=listen_on,
-            local_content=local_content,
+            durable_db=durable_db,
             config=kademlia_config,
         )
         self.json_rpc_server = RPCServer(
@@ -108,11 +109,14 @@ async def main() -> None:
     else:
         private_key = keys.PrivateKey(sha256(args.private_key_seed))
 
+    durable_db_path = application_root_dir / 'durable-db'
+    durable_db = DurableDB(durable_db_path)
+
     alexandria = Alexandria(
         private_key=private_key,
         listen_on=listen_on,
         bootnodes=bootnodes,
-        local_content={},
+        durable_db=durable_db,
         kademlia_config=DEFAULT_CONFIG,
         ipc_path=ipc_path,
     )

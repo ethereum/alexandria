@@ -1,5 +1,5 @@
 import logging
-from typing import Collection, Mapping
+from typing import Collection
 
 from async_service import Service
 from eth_keys import keys
@@ -8,6 +8,7 @@ import trio
 from alexandria._utils import humanize_node_id
 from alexandria.abc import (
     ClientAPI,
+    DurableDatabaseAPI,
     Endpoint,
     EndpointDatabaseAPI,
     KademliaAPI,
@@ -28,7 +29,7 @@ class Application(Service):
     logger = logging.getLogger('alexandria.app.Application')
 
     client: ClientAPI
-    local_content: Mapping[bytes, bytes]
+    durable_db: DurableDatabaseAPI
     endpoint_db: EndpointDatabaseAPI
     routing_table: RoutingTableAPI
     config: KademliaConfig
@@ -38,7 +39,7 @@ class Application(Service):
                  bootnodes: Collection[Node],
                  private_key: keys.PrivateKey,
                  listen_on: Endpoint,
-                 local_content: Mapping[bytes, bytes],
+                 durable_db: DurableDatabaseAPI,
                  config: KademliaConfig,
                  ) -> None:
         self.config = config
@@ -52,7 +53,7 @@ class Application(Service):
         )
         self._bonded = trio.Event()
         self.endpoint_db = MemoryEndpointDB()
-        self.local_content = local_content
+        self.durable_db = durable_db
         self.routing_table = RoutingTable(
             self.client.local_node_id,
             bucket_size=256,
@@ -64,7 +65,7 @@ class Application(Service):
         )
         self.kademlia = Kademlia(
             routing_table=self.routing_table,
-            local_content=self.local_content,
+            durable_db=self.durable_db,
             endpoint_db=self.endpoint_db,
             client=self.client,
             network=self.network,
@@ -78,6 +79,7 @@ class Application(Service):
 
         with trio.fail_after(5):
             await self.client.wait_ready()
+
         self.manager.run_task(self._bootstrap)
         await self._bonded.wait()
         self.logger.info("Bonding Successful!!!")

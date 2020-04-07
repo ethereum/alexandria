@@ -5,7 +5,7 @@ import logging
 from typing import Any, Deque, Iterable, Iterator, Optional, Tuple
 
 from alexandria._utils import humanize_node_id
-from alexandria.abc import RoutingTableAPI, RoutingTableStats
+from alexandria.abc import RoutingTableAPI, RoutingTableStats, BucketInfo
 from alexandria.constants import KEY_BIT_SIZE
 from alexandria.typing import NodeID
 
@@ -67,6 +67,16 @@ class RoutingTable(RoutingTableAPI):
             num_buckets=len(self.buckets),
             full_buckets=full_buckets,
             num_in_replacement_cache=num_in_replacement_cache,
+        )
+
+    def get_bucket_info(self, index: int) -> BucketInfo:
+        bucket = self.buckets[index]
+        replacement_cache = self.replacement_caches[index]
+        return BucketInfo(
+            idx=index,
+            is_full=(len(bucket) >= self.bucket_size),
+            nodes=tuple(bucket),
+            replacement_cache=tuple(replacement_cache),
         )
 
     def get_index_bucket_and_replacement_cache(self,

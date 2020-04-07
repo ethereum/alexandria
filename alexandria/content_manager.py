@@ -25,9 +25,10 @@ from alexandria.abc import (
     ContentIndexAPI,
     ContentManagerAPI,
     ContentStats,
-    Location,
     ContentBundle,
     Content,
+    DurableDatabaseAPI,
+    Location,
 )
 from alexandria.config import StorageConfig
 from alexandria.typing import NodeID
@@ -350,7 +351,7 @@ class ContentManager(ContentManagerAPI):
 
     def __init__(self,
                  center_id: NodeID,
-                 durable_db: Mapping[bytes, bytes],
+                 durable_db: DurableDatabaseAPI,
                  config: StorageConfig = None,
                  ) -> None:
         if config is None:
@@ -361,10 +362,7 @@ class ContentManager(ContentManagerAPI):
         # A database not subject to storage limits that will not have data
         # discarded or added to it.
         self.durable_db = durable_db
-        self.durable_index = {
-            content_key_to_node_id(key): frozenset({self.center_id})
-            for key in self.durable_db
-        }
+        self.rebuild_durable_index()
 
         # A database that will be dynamically populated by data we learn about
         # over the network.  Total size is capped.  Eviction of keys is based
@@ -383,6 +381,12 @@ class ContentManager(ContentManagerAPI):
         # LRU policy.
         self.cache_db = CacheDB(capacity=self.config.cache_storage_size)
         self.cache_index = CacheIndex(capacity=self.config.cache_index_size)
+
+    def rebuild_durable_index(self) -> None:
+        self.durable_index = {
+            content_key_to_node_id(key): frozenset({self.center_id})
+            for key in self.durable_db.keys()
+        }
 
     def iter_content_keys(self) -> Tuple[bytes, ...]:
         return tuple(itertools.chain(
@@ -408,7 +412,7 @@ class ContentManager(ContentManagerAPI):
 
     def get_content(self, key: bytes) -> bytes:
         try:
-            return self.durable_db[key]
+            return self.durable_db.get(key)
         except KeyError:
             pass
 
@@ -472,8 +476,8 @@ class ContentManager(ContentManagerAPI):
         self._ingest_content_index(content_id, content.node_id)
 
     def _ingest_content_data(self, key: bytes, data: bytes) -> None:
-        if key in self.durable_db:
-            local_data = self.durable_db[key]
+        if key in self.durable_db.keys():
+            local_data = self.durable_db.get(key)
             if local_data != data:
                 self.logger.warning(
                     "Encountered data mismatch for key %s: local=%s other=%s",

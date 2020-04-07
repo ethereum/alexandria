@@ -1,7 +1,9 @@
 import collections
 import ipaddress
+import pathlib
 import secrets
 import socket
+import tempfile
 from typing import Deque
 
 from eth_keys import keys
@@ -25,6 +27,7 @@ from alexandria.constants import (
     KADEMLIA_PING_INTERVAL,
     KADEMLIA_ANNOUNCE_INTERVAL,
 )
+from alexandria.durable_db import DurableDB
 
 
 def _mk_private_key_bytes() -> bytes:
@@ -122,6 +125,13 @@ class KademliaConfigFactory(factory.Factory):  # type: ignore
     storage_config = factory.SubFactory(StorageConfigFactory)
 
 
+class DurableDBFactory(factory.Factory):  # type: ignore
+    class Meta:
+        model = DurableDB
+
+    db_path = factory.LazyFunction(lambda: pathlib.Path(tempfile.TemporaryDirectory().name))
+
+
 class ApplicationFactory(factory.Factory):  # type: ignore
     class Meta:
         model = Application
@@ -130,4 +140,4 @@ class ApplicationFactory(factory.Factory):  # type: ignore
     private_key = factory.SubFactory(PrivateKeyFactory)
     listen_on = factory.SubFactory(EndpointFactory)
     config = factory.SubFactory(KademliaConfigFactory)
-    local_content = factory.LazyFunction(lambda: {})
+    durable_db = factory.SubFactory(DurableDBFactory)

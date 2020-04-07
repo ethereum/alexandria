@@ -1,10 +1,9 @@
 import logging
 import secrets
-from typing import Iterable, Mapping, Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
 from async_service import Service
 from eth_utils import encode_hex, to_tuple
-from eth_utils.toolz import partition_all
 import trio
 
 from alexandria._utils import every, humanize_node_id, content_key_to_node_id
@@ -12,6 +11,8 @@ from alexandria.abc import (
     ClientAPI,
     ContentBundle,
     ContentManagerAPI,
+    DurableDatabaseAPI,
+    Endpoint,
     EndpointDatabaseAPI,
     KademliaAPI,
     NetworkAPI,
@@ -44,7 +45,7 @@ class Kademlia(Service, KademliaAPI):
     def __init__(self,
                  routing_table: RoutingTableAPI,
                  endpoint_db: EndpointDatabaseAPI,
-                 local_content: Mapping[bytes, bytes],
+                 durable_db: DurableDatabaseAPI,
                  client: ClientAPI,
                  network: NetworkAPI,
                  config: KademliaConfig = None,
@@ -59,7 +60,7 @@ class Kademlia(Service, KademliaAPI):
         self.network = network
         self.content_manager = ContentManager(
             center_id=self.client.local_node_id,
-            durable_db=local_content,
+            durable_db=durable_db,
             config=config.storage_config,
         )
 
@@ -227,25 +228,9 @@ class Kademlia(Service, KademliaAPI):
                 await self.client.send_pong(request.node, request_id=request.payload.request_id)
 
     async def _periodically_announce_content(self) -> None:
-        async with trio.open_nursery() as nursery:
-            limiter = trio.CapacityLimiter(self.config.ANNOUNCE_CONCURRENCY)
-
-            async def do_announce(node: Node, key: bytes, who: Node) -> None:
-                async with limiter:
-                    await self.client.send_advertise(node, key=key, who=who)
-
-            async for _ in every(self.config.ANNOUNCE_INTERVAL):  # noqa: F841
-                for key in self.content_manager.iter_content_keys():
-                    content_id = content_key_to_node_id(key)
-                    nodes_around = await self.network.iterative_lookup(content_id)
-                    for batch in partition_all(self.config.ANNOUNCE_CONCURRENCY, nodes_around):
-                        for node in batch:
-                            nursery.start_soon(
-                                do_announce,
-                                node,
-                                key,
-                                self.client.local_node,
-                            )
+        async for _ in every(self.config.ANNOUNCE_INTERVAL, initial_delay=10):  # noqa: F841
+            for key in self.content_manager.iter_content_keys():
+                await self.network.announce(key, self.client.local_node)
 
     async def _handle_content_ingestion(self,
                                         receive_channel: trio.abc.ReceiveChannel[Tuple[Node, bytes]],  # noqa: E501
@@ -317,6 +302,15 @@ class Kademlia(Service, KademliaAPI):
                     )
 
     async def _handle_locate_requests(self) -> None:
+        def get_endpoint(node_id: NodeID) -> Endpoint:
+            try:
+                return self.endpoint_db.get_endpoint(node_id)
+            except KeyError:
+                if node_id == self.client.local_node_id:
+                    return self.client.listen_on
+                else:
+                    raise
+
         with self.client.message_dispatcher.subscribe(Locate) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
@@ -326,8 +320,9 @@ class Kademlia(Service, KademliaAPI):
                 # TODO: verify content is actually available
                 # TODO: check distance of key and store conditionally
                 location_ids = self.content_manager.get_index(content_id)
+
                 locations = tuple(
-                    Node(node_id, self.endpoint_db.get_endpoint(node_id))
+                    Node(node_id, get_endpoint(node_id))
                     for node_id in location_ids
                 )
                 await self.client.send_locations(

@@ -7,7 +7,7 @@ import pathlib
 import time
 from typing import Any, List, Mapping, Optional, Tuple, cast
 
-from eth_utils import ValidationError, to_int
+from eth_utils import ValidationError, to_int, decode_hex, encode_hex
 from mypy_extensions import TypedDict
 import trio
 
@@ -16,13 +16,19 @@ from async_service import Service
 from alexandria._utils import node_id_to_hex
 from alexandria.abc import (
     ClientAPI,
+    ContentBundle,
     Endpoint,
     KademliaAPI,
     NetworkAPI,
     Node,
     RoutingTableAPI,
 )
-from alexandria.constants import PING_TIMEOUT
+from alexandria.constants import (
+    ADVERTISE_TIMEOUT,
+    LOCATE_TIMEOUT,
+    PING_TIMEOUT,
+    RETRIEVE_TIMEOUT,
+)
 from alexandria.typing import NodeID
 
 NEW_LINE = "\n"
@@ -84,6 +90,28 @@ def generate_response(request: RPCRequest, result: Any, error: Optional[str]) ->
     return json.dumps(response)
 
 
+def node_to_rpc(node: Node) -> Tuple[str, str, int]:
+    return (
+        node_id_to_hex(node.node_id),
+        str(node.endpoint.ip_address),
+        node.endpoint.port,
+    )
+
+
+def node_from_rpc(rpc_node: Tuple[str, str, int]) -> Node:
+    node_id_as_hex, ip_address, port = rpc_node
+    node_id = NodeID(to_int(hexstr=node_id_as_hex))
+    node = Node(
+        node_id,
+        Endpoint(ipaddress.IPv4Address(ip_address), port),
+    )
+    return node
+
+
+def node_id_from_hex(node_id_as_hex: str) -> NodeID:
+    return NodeID(to_int(hexstr=node_id_as_hex))
+
+
 class RPCServer(Service):
     logger = logging.getLogger('alexandria.rpc.RPCServer')
 
@@ -98,6 +126,10 @@ class RPCServer(Service):
         self.network = network
         self.kademlia = kademlia
         self.routing_table = routing_table
+        self._serving = trio.Event()
+
+    async def wait_serving(self) -> None:
+        await self._serving.wait()
 
     async def run(self) -> None:
         self.manager.run_daemon_task(self.serve, self.ipc_path)
@@ -116,12 +148,24 @@ class RPCServer(Service):
 
         if method == "nodeId":
             return await self._handle_nodeId(request)
-        elif method == "routingTableInfo":
-            return await self._handle_routingTableInfo(request)
-        elif method == "routingTableBucket":
-            return await self._handle_routingTableBucket(request, *params)
-        elif method == "bond":
-            return await self._handle_bond(request, *params)
+        elif method == "routingTableStats":
+            return await self._handle_routingTableStats(request)
+        elif method == "routingTableBucketInfo":
+            return await self._handle_routingTableBucketInfo(request, *params)
+        elif method == "ping":
+            return await self._handle_ping(request, *params)
+        elif method == "findNodes":
+            return await self._handle_find_nodes(request, *params)
+        elif method == "advertise":
+            return await self._handle_advertise(request, *params)
+        elif method == "locate":
+            return await self._handle_locate(request, *params)
+        elif method == "retrieve":
+            return await self._handle_retrieve(request, *params)
+        elif method == "contentStats":
+            return await self._handle_contentStats(request, *params)
+        elif method == "addContent":
+            return await self._handle_addContent(request, *params)
         else:
             return generate_response(request, None, f"Unknown method: {namespaced_method}")
 
@@ -139,6 +183,8 @@ class RPCServer(Service):
             await sock.bind(str(ipc_path))
             # Allow up to 10 pending connections.
             sock.listen(10)
+
+            self._serving.set()
 
             while self.manager.is_running:
                 conn, addr = await sock.accept()
@@ -203,48 +249,28 @@ class RPCServer(Service):
     async def _handle_nodeId(self, request: RPCRequest) -> str:
         await trio.hazmat.checkpoint()
         node = self.client.local_node
-        result = (
-            node_id_to_hex(node.node_id),
-            str(node.endpoint.ip_address),
-            node.endpoint.port,
-        )
+        result = node_to_rpc(node)
         return generate_response(request, result, None)
 
-    async def _handle_routingTableInfo(self, request: RPCRequest) -> str:
+    async def _handle_routingTableStats(self, request: RPCRequest) -> str:
         await trio.hazmat.checkpoint()
-        result = {
-            "center_id": node_id_to_hex(self.routing_table.center_node_id),
-            "size": len(self.routing_table),
-            "bucket_size": self.routing_table.bucket_size,
-            "bucket_count": self.routing_table.bucket_count,
-        }
-        return generate_response(request, result, None)
+        stats = self.routing_table.get_stats()
+        return generate_response(request, stats, None)
 
-    async def _handle_routingTableBucket(self, request: RPCRequest, bucket_idx: int) -> str:
+    async def _handle_routingTableBucketInfo(self, request: RPCRequest, bucket_idx: int) -> str:
         await trio.hazmat.checkpoint()
         if bucket_idx >= self.routing_table.bucket_size:
             return generate_response(request, None, f"Invalid bucket index: {bucket_idx}")
 
-        bucket = self.routing_table.buckets[bucket_idx]
-        replacements = self.routing_table.replacement_caches[bucket_idx]
-        result = {
-            "index": bucket_idx,
-            "is_full": (len(bucket) >= self.routing_table.bucket_size),
-            "nodes": tuple(node_id_to_hex(node_id) for node_id in bucket),
-            "replacement_cache": tuple(node_id_to_hex(node_id) for node_id in replacements),
-        }
-        return generate_response(request, result, None)
+        info = self.routing_table.get_bucket_info(bucket_idx)
+        return generate_response(request, info, None)
 
-    async def _handle_bond(self,
+    async def _handle_ping(self,
                            request: RPCRequest,
                            node_id_as_hex: str,
                            ip_address: str,
                            port: int) -> str:
-        node_id = NodeID(to_int(hexstr=node_id_as_hex))
-        node = Node(
-            node_id,
-            Endpoint(ipaddress.IPv4Address(ip_address), port),
-        )
+        node = node_from_rpc((node_id_as_hex, ip_address, port))
         try:
             with trio.fail_after(PING_TIMEOUT):
                 start_at = time.monotonic()
@@ -255,5 +281,124 @@ class RPCServer(Service):
             return generate_response(
                 request,
                 None,
-                f"Timed out waiting for pong response from {node}",
+                f"Timed out waiting for Pong response from {node}",
             )
+
+    async def _handle_find_nodes(self,
+                                 request: RPCRequest,
+                                 node_id_as_hex: str,
+                                 ip_address: str,
+                                 port: int,
+                                 distance: int,
+                                 ) -> str:
+        node = node_from_rpc((node_id_as_hex, ip_address, port))
+        if distance < 0 or distance > 256:
+            return generate_response(
+                request,
+                None,
+                f"`distance` must be in range [0, 256]: Got {distance}",
+            )
+
+        try:
+            with trio.fail_after(PING_TIMEOUT):
+                found_nodes = await self.network.single_lookup(node, distance=distance)
+            payload = tuple(
+                node_to_rpc(node)
+                for node in found_nodes
+            )
+            return generate_response(request, payload, None)
+        except trio.TooSlowError:
+            return generate_response(
+                request,
+                None,
+                f"Timed out waiting for FoundNodes response from {node}",
+            )
+
+    async def _handle_advertise(self,
+                                request: RPCRequest,
+                                node_id_as_hex: str,
+                                node_ip_address: str,
+                                node_port: int,
+                                key_as_hex: str,
+                                who_id_as_hex: str,
+                                who_ip_address: str,
+                                who_port: int,
+                                ) -> str:
+        key = decode_hex(key_as_hex)
+        node = node_from_rpc((node_id_as_hex, node_ip_address, node_port))
+        who = node_from_rpc((who_id_as_hex, who_ip_address, who_port))
+        try:
+            with trio.fail_after(ADVERTISE_TIMEOUT):
+                start_at = time.monotonic()
+                await self.client.advertise(node, key=key, who=who)
+            end_at = time.monotonic()
+            return generate_response(request, end_at - start_at, None)
+        except trio.TooSlowError:
+            return generate_response(
+                request,
+                None,
+                f"Timed out waiting for Ack response from {node}",
+            )
+
+    async def _handle_locate(self,
+                             request: RPCRequest,
+                             node_id_as_hex: str,
+                             node_ip_address: str,
+                             node_port: int,
+                             key_as_hex: str,
+                             ) -> str:
+        key = decode_hex(key_as_hex)
+        node = node_from_rpc((node_id_as_hex, node_ip_address, node_port))
+        try:
+            with trio.fail_after(LOCATE_TIMEOUT):
+                locations = await self.network.locate(node, key=key)
+            payload = tuple(node_to_rpc(node) for node in locations)
+            return generate_response(request, payload, None)
+        except trio.TooSlowError:
+            return generate_response(
+                request,
+                None,
+                f"Timed out waiting for Locations response from {node}",
+            )
+
+    async def _handle_retrieve(self,
+                               request: RPCRequest,
+                               node_id_as_hex: str,
+                               node_ip_address: str,
+                               node_port: int,
+                               key_as_hex: str,
+                               ) -> str:
+        key = decode_hex(key_as_hex)
+        node = node_from_rpc((node_id_as_hex, node_ip_address, node_port))
+        try:
+            with trio.fail_after(RETRIEVE_TIMEOUT):
+                data = await self.network.retrieve(node, key=key)
+            return generate_response(request, encode_hex(data), None)
+        except trio.TooSlowError:
+            return generate_response(
+                request,
+                None,
+                f"Timed out waiting for Chunks response from {node}",
+            )
+
+    async def _handle_contentStats(self, request: RPCRequest) -> str:
+        stats = self.kademlia.content_manager.get_stats()
+        return generate_response(request, stats, None)
+
+    async def _handle_addContent(self,
+                                 request: RPCRequest,
+                                 key_as_hex: str,
+                                 data_as_hex: str,
+                                 is_ephemeral: bool) -> str:
+        key = decode_hex(key_as_hex)
+        data = decode_hex(data_as_hex)
+        if is_ephemeral:
+            bundle = ContentBundle(key, data, self.client.local_node_id)
+            self.kademlia.content_manager.ingest_content(bundle)
+            # TODO: should announce...
+        else:
+            self.kademlia.content_manager.durable_db.set(key, data)
+            self.kademlia.content_manager.rebuild_durable_index()
+            # TODO: should announce...
+        await self.network.announce(key, self.client.local_node)
+        return generate_response(request, (), None)
