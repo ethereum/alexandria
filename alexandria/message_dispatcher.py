@@ -33,7 +33,7 @@ MAX_REQUEST_ID_ATTEMPTS = 3
 
 
 class MessageDispatcher(Service, MessageDispatcherAPI):
-    logger = logging.getLogger('alexandria.subscriptions.SubscriptionManager')
+    logger = logging.getLogger('alexandria.message_dispatcher.MessageDispatcher')
 
     _subscriptions: DefaultDict[int, Set[trio.abc.SendChannel[MessageAPI[sedes.Serializable]]]]
     _reserved_request_ids: Set[Tuple[NodeID, int]]
@@ -149,18 +149,19 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
         node_id = request.node.node_id
         request_id = request.payload.request_id
 
-        async with self.subscribe(response_payload_type) as subscription:
-            self.logger.debug(
-                "Sending request with request id %d",
-                request_id,
-            )
-            # Send the request
-            await self.send_message(request)
+        with trio.fail_after(60):
+            async with self.subscribe(response_payload_type) as subscription:
+                self.logger.debug(
+                    "Sending request with request id %d",
+                    request_id,
+                )
+                # Send the request
+                await self.send_message(request)
 
-            # Wait for the response
-            async with send_channel:
-                async for response in subscription:
-                    if response.node.node_id != node_id or response.payload.request_id != request_id:  # noqa: E501
-                        continue
-                    else:
-                        await send_channel.send(response)
+                # Wait for the response
+                async with send_channel:
+                    async for response in subscription:
+                        if response.node.node_id != node_id or response.payload.request_id != request_id:  # noqa: E501
+                            continue
+                        else:
+                            await send_channel.send(response)
