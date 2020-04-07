@@ -59,20 +59,22 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
     async def _handle_inbound_messages(self,
                                        receive_channel: trio.abc.ReceiveChannel[MessageAPI[sedes.Serializable]],  # noqa: E501
                                        ) -> None:
-        async with trio.open_nursery() as nursery:
-            async with receive_channel:
-                async for message in receive_channel:
-                    #
-                    # Subscriptions
-                    #
-                    channels = self._subscriptions[message.message_id]
-                    self.logger.debug(
-                        'Handling %d subscriptions for message: %s',
-                        len(channels),
-                        message,
-                    )
-                    for send_channel in channels:
-                        nursery.start_soon(send_channel.send, message)
+        async with receive_channel:
+            async for message in receive_channel:
+                #
+                # Subscriptions
+                #
+                channels = self._subscriptions[message.message_id]
+                self.logger.debug(
+                    'Handling %d subscriptions for message: %s',
+                    len(channels),
+                    message,
+                )
+                for send_channel in channels:
+                    try:
+                        send_channel.send_nowait(message)
+                    except trio.WouldBlock:
+                        self.logger.debug("Subscription channel full: %s", send_channel)
 
     #
     # Utility
