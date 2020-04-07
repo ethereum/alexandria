@@ -5,7 +5,6 @@ from typing import (
     AsyncIterable,
     Awaitable,
     Collection,
-    ContextManager,
     Deque,
     FrozenSet,
     Generic,
@@ -28,6 +27,7 @@ from eth_keys import keys
 from eth_typing import HexStr
 from eth_utils import to_int, remove_0x_prefix
 from ssz import sedes
+import trio
 
 from alexandria.payloads import Ack, Chunk, FoundNodes, Locations, Pong
 from alexandria.typing import AES128Key, NodeID, Tag
@@ -262,16 +262,6 @@ class PoolAPI(ABC):
 TItem = TypeVar('TItem')
 
 
-class SubscriptionAPI(ContextManager['SubscriptionAPI["TItem"]'], Awaitable[TItem]):
-    @abstractmethod
-    async def receive(self) -> TItem:
-        ...
-
-    @abstractmethod
-    def stream(self) -> AsyncIterable[TItem]:
-        ...
-
-
 TAwaitable = TypeVar('TAwaitable')
 
 
@@ -328,14 +318,16 @@ class MessageDispatcherAPI(ServiceAPI):
     # Subscriptions
     #
     @abstractmethod
-    def subscribe(self, payload_type: Type[TPayload]) -> SubscriptionAPI[MessageAPI[TPayload]]:
+    def subscribe(self,
+                  payload_type: Type[TPayload],
+                  ) -> AsyncContextManager[trio.abc.ReceiveChannel[MessageAPI[TPayload]]]:
         ...
 
     @abstractmethod
     def subscribe_request(self,
                           message: MessageAPI[sedes.Serializable],
                           response_payload_type: Type[TPayload],
-                          ) -> SubscriptionAPI[MessageAPI[TPayload]]:
+                          ) -> AsyncContextManager[trio.abc.ReceiveChannel[MessageAPI[TPayload]]]:
         ...
 
 

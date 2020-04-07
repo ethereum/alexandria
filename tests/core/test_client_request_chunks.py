@@ -15,7 +15,7 @@ async def test_client_retrieve_content_single_response(alice_and_bob_clients):
     async with trio.open_nursery() as nursery:
         data = b'unicorns-and-rainbows'
 
-        with bob.message_dispatcher.subscribe(Retrieve) as retrieve_subscription:
+        async with bob.message_dispatcher.subscribe(Retrieve) as retrieve_subscription:
             async def _handle_retrieve():
                 with trio.fail_after(1):
                     message = await retrieve_subscription.receive()
@@ -50,7 +50,7 @@ async def test_client_retrieve_content_multi_response(alice_and_bob_clients):
         data = bytes(bytearray((random.randint(0, 255) for _ in range(4096))))
         num_chunks = int(math.ceil(len(data) / CHUNK_MAX_SIZE))
 
-        with bob.message_dispatcher.subscribe(Retrieve) as retrieve_subscription:
+        async with bob.message_dispatcher.subscribe(Retrieve) as retrieve_subscription:
             async def _handle_retrieve():
                 with trio.fail_after(1):
                     message = await retrieve_subscription.receive()

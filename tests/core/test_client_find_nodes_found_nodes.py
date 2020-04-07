@@ -16,7 +16,7 @@ async def test_client_find_nodes_request_single_response(alice_and_bob_clients):
     found_node_id = public_key_to_node_id(PublicKeyFactory())
 
     async with trio.open_nursery() as nursery:
-        with bob.message_dispatcher.subscribe(FindNodes) as find_nodes_subscription:
+        async with bob.message_dispatcher.subscribe(FindNodes) as find_nodes_subscription:
             async def _handle_find_nodes():
                 found_nodes = (NodeFactory(node_id=found_node_id),)
 
@@ -54,7 +54,7 @@ async def test_client_find_nodes_request_multi_response(alice_and_bob_clients):
     num_expected_messages = int(math.ceil(100 / NODES_PER_PAYLOAD))
 
     async with trio.open_nursery() as nursery:
-        with bob.message_dispatcher.subscribe(FindNodes) as find_nodes_subscription:
+        async with bob.message_dispatcher.subscribe(FindNodes) as find_nodes_subscription:
             async def _handle_find_nodes():
                 with trio.fail_after(1):
                     request = await find_nodes_subscription.receive()

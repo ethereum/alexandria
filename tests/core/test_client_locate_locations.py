@@ -16,7 +16,7 @@ async def test_client_locate_request_single_response(alice_and_bob_clients):
     async with trio.open_nursery() as nursery:
         single_location = NodeFactory()
 
-        with bob.message_dispatcher.subscribe(Locate) as locate_subscription:
+        async with bob.message_dispatcher.subscribe(Locate) as locate_subscription:
             async def _handle_locate():
                 with trio.fail_after(1):
                     message = await locate_subscription.receive()
@@ -52,7 +52,7 @@ async def test_client_locate_request_multi_response(alice_and_bob_clients):
         locations = NodeFactory.create_batch(100)
         num_expected_messages = int(math.ceil(100 / NODES_PER_PAYLOAD))
 
-        with bob.message_dispatcher.subscribe(Locate) as locate_subscription:
+        async with bob.message_dispatcher.subscribe(Locate) as locate_subscription:
             async def _handle_locate():
                 with trio.fail_after(1):
                     message = await locate_subscription.receive()

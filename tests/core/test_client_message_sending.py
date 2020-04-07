@@ -14,7 +14,7 @@ from alexandria.payloads import (
 async def test_client_send_ping(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(Ping) as subscription:
+    async with bob.message_dispatcher.subscribe(Ping) as subscription:
         request_id = await alice.send_ping(bob.local_node)
 
         with trio.fail_after(1):
@@ -30,7 +30,7 @@ async def test_client_send_ping(alice_and_bob_clients):
 async def test_client_send_pong(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(Pong) as subscription:
+    async with bob.message_dispatcher.subscribe(Pong) as subscription:
         await alice.send_pong(bob.local_node, request_id=1234)
 
         with trio.fail_after(1):
@@ -45,7 +45,7 @@ async def test_client_send_pong(alice_and_bob_clients):
 async def test_client_send_find_nodes(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(FindNodes) as subscription:
+    async with bob.message_dispatcher.subscribe(FindNodes) as subscription:
         request_id = await alice.send_find_nodes(bob.local_node, distance=1)
 
         with trio.fail_after(1):
@@ -61,7 +61,7 @@ async def test_client_send_find_nodes(alice_and_bob_clients):
 async def test_client_send_found_nodes(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(FoundNodes) as subscription:
+    async with bob.message_dispatcher.subscribe(FoundNodes) as subscription:
         total_messages = await alice.send_found_nodes(
             bob.local_node,
             request_id=1234,
@@ -81,7 +81,7 @@ async def test_client_send_found_nodes(alice_and_bob_clients):
 async def test_client_send_advertise(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(Advertise) as subscription:
+    async with bob.message_dispatcher.subscribe(Advertise) as subscription:
         request_id = await alice.send_advertise(
             bob.local_node,
             key=b'key',
@@ -103,7 +103,7 @@ async def test_client_send_advertise(alice_and_bob_clients):
 async def test_client_send_ack(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(Ack) as subscription:
+    async with bob.message_dispatcher.subscribe(Ack) as subscription:
         await alice.send_ack(bob.local_node, request_id=1234)
 
         with trio.fail_after(1):
@@ -119,7 +119,7 @@ async def test_client_send_ack(alice_and_bob_clients):
 async def test_client_send_locate(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(Locate) as subscription:
+    async with bob.message_dispatcher.subscribe(Locate) as subscription:
         request_id = await alice.send_locate(bob.local_node, key=b'key')
 
         with trio.fail_after(1):
@@ -136,7 +136,7 @@ async def test_client_send_locate(alice_and_bob_clients):
 async def test_client_send_locations(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(Locations) as subscription:
+    async with bob.message_dispatcher.subscribe(Locations) as subscription:
         total_messages = await alice.send_locations(bob.local_node, request_id=1234, locations=())
 
         with trio.fail_after(1):
@@ -155,7 +155,7 @@ async def test_client_send_locations(alice_and_bob_clients):
 async def test_client_send_retrieve(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(Retrieve) as subscription:
+    async with bob.message_dispatcher.subscribe(Retrieve) as subscription:
         request_id = await alice.send_retrieve(bob.local_node, key=b'key')
 
         with trio.fail_after(1):
@@ -172,7 +172,7 @@ async def test_client_send_retrieve(alice_and_bob_clients):
 async def test_client_send_chunks(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    with bob.message_dispatcher.subscribe(Chunk) as subscription:
+    async with bob.message_dispatcher.subscribe(Chunk) as subscription:
         total_chunks = await alice.send_chunks(bob.local_node, request_id=1234, data=b'key')
 
         with trio.fail_after(1):

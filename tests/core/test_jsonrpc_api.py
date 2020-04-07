@@ -89,7 +89,7 @@ async def test_rpc_get_routing_table_bucket_info(w3, rpc_node):
 @pytest.mark.trio
 async def test_rpc_ping(w3, rpc_node, peers):
     bob = peers[0]
-    with bob.client.message_dispatcher.subscribe(Ping) as subscription:
+    async with bob.client.message_dispatcher.subscribe(Ping) as subscription:
         elapsed = await trio.to_thread.run_sync(w3.alexandria.ping, bob.client.local_node)
         with trio.fail_after(1):
             await subscription.receive()
@@ -99,7 +99,7 @@ async def test_rpc_ping(w3, rpc_node, peers):
 @pytest.mark.trio
 async def test_rpc_find_nodes(w3, rpc_node, peers):
     bob = peers[0]
-    with bob.client.message_dispatcher.subscribe(FindNodes) as subscription:
+    async with bob.client.message_dispatcher.subscribe(FindNodes) as subscription:
         found_nodes = await trio.to_thread.run_sync(
             w3.alexandria.find_nodes,
             bob.client.local_node,
@@ -114,7 +114,7 @@ async def test_rpc_find_nodes(w3, rpc_node, peers):
 async def test_rpc_advertise(w3, rpc_node, peers):
     bob = peers[0]
 
-    with bob.client.message_dispatcher.subscribe(Advertise) as subscription:
+    async with bob.client.message_dispatcher.subscribe(Advertise) as subscription:
         elapsed = await trio.to_thread.run_sync(
             w3.alexandria.advertise,
             bob.client.local_node,
@@ -134,7 +134,7 @@ async def test_rpc_locate(w3, rpc_node, peers):
         b'value-a',
         bob.client.local_node_id,
     ))
-    with bob.client.message_dispatcher.subscribe(Locate) as subscription:
+    async with bob.client.message_dispatcher.subscribe(Locate) as subscription:
         found_nodes = await trio.to_thread.run_sync(
             w3.alexandria.locate,
             bob.client.local_node,
@@ -155,7 +155,7 @@ async def test_rpc_retrieve(w3, rpc_node, peers):
         b'value-a',
         bob.client.local_node_id,
     ))
-    with bob.client.message_dispatcher.subscribe(Retrieve) as subscription:
+    async with bob.client.message_dispatcher.subscribe(Retrieve) as subscription:
         data = await trio.to_thread.run_sync(
             w3.alexandria.retrieve,
             bob.client.local_node,

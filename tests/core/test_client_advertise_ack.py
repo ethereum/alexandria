@@ -9,7 +9,7 @@ async def test_client_advertise_request(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
     async with trio.open_nursery() as nursery:
-        with bob.message_dispatcher.subscribe(Advertise) as advertise_subscription:
+        async with bob.message_dispatcher.subscribe(Advertise) as advertise_subscription:
             async def _handle_advertise():
                 with trio.fail_after(1):
                     message = await advertise_subscription.receive()

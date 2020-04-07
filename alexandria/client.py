@@ -272,7 +272,7 @@ class Client(Service, ClientAPI):
     async def ping(self, node: Node) -> MessageAPI[Pong]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Ping(request_id), node)
-        with self.message_dispatcher.subscribe_request(message, Pong) as subscription:
+        async with self.message_dispatcher.subscribe_request(message, Pong) as subscription:
             return await subscription.receive()
 
     async def find_nodes(self, node: Node, *, distance: int) -> Tuple[MessageAPI[FoundNodes], ...]:
@@ -283,7 +283,7 @@ class Client(Service, ClientAPI):
     async def advertise(self, node: Node, *, key: bytes, who: Node) -> MessageAPI[Ack]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Advertise(request_id, key, who.to_payload()), node)
-        with self.message_dispatcher.subscribe_request(message, Ack) as subscription:
+        async with self.message_dispatcher.subscribe_request(message, Ack) as subscription:
             return await subscription.receive()
 
     async def locate(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Locations], ...]:
@@ -301,8 +301,7 @@ class Client(Service, ClientAPI):
                                               request: MessageAPI[sedes.Serializable],
                                               response_payload_type: Type[TPayload],
                                               ) -> Tuple[MessageAPI[TPayload], ...]:
-        subscription = self.message_dispatcher.subscribe_request(request, response_payload_type)
-        with subscription:
+        async with self.message_dispatcher.subscribe_request(request, response_payload_type) as subscription:  # noqa: E501
             responses = []
             total_messages = None
             while True:
@@ -391,10 +390,13 @@ class Client(Service, ClientAPI):
     async def _periodically_ping_sessions(self) -> None:
         async for _ in every(SESSION_IDLE_TIMEOUT):
             for session in self.pool.get_idle_sesssions():
-                with trio.move_on_after(PING_TIMEOUT) as scope:
-                    await self.ping(session.remote_node)
+                if not session.is_handshake_complete:
+                    continue
 
-                if scope.cancelled_caught:
+                try:
+                    with trio.fail_after(PING_TIMEOUT):
+                        await self.ping(session.remote_node)
+                except trio.TooSlowError:
                     self.logger.debug('Detected unresponsive idle session: %s', session)
                     self.pool.remove_session(session.session_id)
                     await self.events.session_idle.trigger(session)

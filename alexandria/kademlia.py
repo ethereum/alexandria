@@ -134,7 +134,7 @@ class Kademlia(Service, KademliaAPI):
             )
 
     async def _handle_lookup_requests(self) -> None:
-        with self.client.message_dispatcher.subscribe(FindNodes) as subscription:
+        async with self.client.message_dispatcher.subscribe(FindNodes) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
                 self.logger.debug("handling request: %s", request)
@@ -218,7 +218,7 @@ class Kademlia(Service, KademliaAPI):
                     break
 
     async def _pong_when_pinged(self) -> None:
-        with self.client.message_dispatcher.subscribe(Ping) as subscription:
+        async with self.client.message_dispatcher.subscribe(Ping) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
                 self.logger.debug(
@@ -282,7 +282,7 @@ class Kademlia(Service, KademliaAPI):
         return content_distance < furthest_distance
 
     async def _handle_advertise_requests(self) -> None:
-        with self.client.message_dispatcher.subscribe(Advertise) as subscription:
+        async with self.client.message_dispatcher.subscribe(Advertise) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
                 payload = request.payload
@@ -311,7 +311,7 @@ class Kademlia(Service, KademliaAPI):
                 else:
                     raise
 
-        with self.client.message_dispatcher.subscribe(Locate) as subscription:
+        async with self.client.message_dispatcher.subscribe(Locate) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
                 payload = request.payload
@@ -332,7 +332,7 @@ class Kademlia(Service, KademliaAPI):
                 )
 
     async def _handle_retrieve_requests(self) -> None:
-        with self.client.message_dispatcher.subscribe(Retrieve) as subscription:
+        async with self.client.message_dispatcher.subscribe(Retrieve) as subscription:
             while self.manager.is_running:
                 request = await subscription.receive()
                 payload = request.payload

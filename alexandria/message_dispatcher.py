@@ -2,12 +2,14 @@ import collections
 import logging
 import secrets
 from typing import (
+    AsyncIterator,
     DefaultDict,
     Set,
     Tuple,
     Type,
 )
 
+from async_generator import asynccontextmanager
 from async_service import Service
 from ssz import sedes
 
@@ -18,11 +20,9 @@ from alexandria.abc import (
     MessageDispatcherAPI,
     NodeID,
     RegistryAPI,
-    SubscriptionAPI,
     TPayload,
 )
 from alexandria.messages import default_registry
-from alexandria.subscriptions import Subscription
 
 
 def get_random_request_id() -> int:
@@ -98,20 +98,24 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
     #
     # Request Response
     #
-    def subscribe(self, payload_type: Type[TPayload]) -> SubscriptionAPI[MessageAPI[TPayload]]:
+    @asynccontextmanager
+    async def subscribe(self,
+                        payload_type: Type[TPayload],
+                        ) -> AsyncIterator[trio.abc.ReceiveChannel[MessageAPI[TPayload]]]:
         message_id = self._registry.get_message_id(payload_type)
         send_channel, receive_channel = trio.open_memory_channel[MessageAPI[TPayload]](256)
         self._subscriptions[message_id].add(send_channel)
-        subscription = Subscription(
-            lambda: self._subscriptions[message_id].remove(send_channel),
-            receive_channel,
-        )
-        return subscription
+        try:
+            async with receive_channel:
+                yield receive_channel
+        finally:
+            self._subscriptions[message_id].remove(send_channel)
 
-    def subscribe_request(self,
-                          request: MessageAPI[sedes.Serializable],
-                          response_payload_type: Type[TPayload],
-                          ) -> SubscriptionAPI[MessageAPI[TPayload]]:
+    @asynccontextmanager
+    async def subscribe_request(self,
+                                request: MessageAPI[sedes.Serializable],
+                                response_payload_type: Type[TPayload],
+                                ) -> AsyncIterator[trio.abc.ReceiveChannel[MessageAPI[TPayload]]]:
         node_id = request.node.node_id
         request_id = request.payload.request_id
 
@@ -125,17 +129,17 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
         key = (node_id, request_id)
         self._reserved_request_ids.add(key)
 
-        subscription = Subscription(
-            lambda: self._reserved_request_ids.remove(key),
-            receive_channel,
-        )
         self.manager.run_task(
             self._manage_request_response,
             request,
             response_payload_type,
             send_channel,
         )
-        return subscription
+        try:
+            async with receive_channel:
+                yield receive_channel
+        finally:
+            self._reserved_request_ids.remove(key)
 
     async def _manage_request_response(self,
                                        request: MessageAPI[sedes.Serializable],
@@ -145,19 +149,18 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
         node_id = request.node.node_id
         request_id = request.payload.request_id
 
-        with trio.fail_after(60):
-            with self.subscribe(response_payload_type) as subscription:
-                self.logger.debug(
-                    "Sending request with request id %d",
-                    request_id,
-                )
-                # Send the request
-                await self.send_message(request)
+        async with self.subscribe(response_payload_type) as subscription:
+            self.logger.debug(
+                "Sending request with request id %d",
+                request_id,
+            )
+            # Send the request
+            await self.send_message(request)
 
-                # Wait for the response
-                async with send_channel:
-                    async for response in subscription.stream():
-                        if response.node.node_id != node_id or response.payload.request_id != request_id:  # noqa: E501
-                            continue
-                        else:
-                            await send_channel.send(response)
+            # Wait for the response
+            async with send_channel:
+                async for response in subscription:
+                    if response.node.node_id != node_id or response.payload.request_id != request_id:  # noqa: E501
+                        continue
+                    else:
+                        await send_channel.send(response)
