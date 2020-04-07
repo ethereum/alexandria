@@ -3,6 +3,7 @@ import logging
 import secrets
 import time
 from typing import Tuple
+import uuid
 
 from eth_keys import keys
 from eth_utils import encode_hex, ValidationError
@@ -73,6 +74,8 @@ class BaseSession(SessionAPI):
         self._inbound_message_send_channel = inbound_message_send_channel
 
         self.last_message_at = 0.0
+
+        self.session_id = uuid.uuid4()
 
     def __str__(self) -> str:
         if self.is_initiator:

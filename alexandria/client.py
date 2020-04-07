@@ -396,14 +396,14 @@ class Client(Service, ClientAPI):
 
                 if scope.cancelled_caught:
                     self.logger.debug('Detected unresponsive idle session: %s', session)
-                    self.pool.remove_session(session.remote_node_id)
+                    self.pool.remove_session(session.session_id)
                     await self.events.session_idle.trigger(session)
 
     async def _monitor_handshake_timeout(self, session: SessionAPI) -> None:
         await trio.sleep(HANDSHAKE_TIMEOUT)
         if not session.is_handshake_complete:
             self.logger.info("Detected timed out handshake: %s", session)
-            self.pool.remove_session(session.remote_node_id)
+            self.pool.remove_session(session.session_id)
             await self.events.handshake_timeout.trigger(session)
 
     async def _handle_outbound_messages(self,
@@ -439,7 +439,7 @@ class Client(Service, ClientAPI):
         try:
             await session.handle_inbound_packet(packet)
         except (DecryptionError, CorruptSession):
-            self.pool.remove_session(session.remote_node_id)
+            self.pool.remove_session(session.session_id)
             self.logger.debug('Removed defunkt session: %s', session)
 
             fresh_session = await self._get_or_create_session(
@@ -450,7 +450,7 @@ class Client(Service, ClientAPI):
             try:
                 await fresh_session.handle_inbound_packet(packet)
             except DecryptionError:
-                self.pool.remove_session(fresh_session.remote_node_id)
+                self.pool.remove_session(fresh_session.session_id)
                 self.logger.debug(
                     'Unable to read packet after resetting session: %s',
                     fresh_session,

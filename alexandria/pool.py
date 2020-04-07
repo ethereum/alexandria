@@ -1,6 +1,7 @@
 import logging
 import time
 from typing import Dict, Tuple
+import uuid
 
 from eth_keys import keys
 from ssz import sedes
@@ -48,9 +49,14 @@ class Pool(PoolAPI):
             if session.last_message_at <= timed_out_at
         )
 
-    def remove_session(self, remote_node_id: NodeID) -> None:
-        if remote_node_id in self._sessions:
-            self._sessions.pop(remote_node_id)
+    def remove_session(self, session_id: uuid.UUID) -> None:
+        to_remove = {
+            session for session
+            in self._sessions.values()
+            if session.session_id == session_id
+        }
+        for session in to_remove:
+            self._sessions.pop(session.remote_node_id)
 
     def has_session(self, remote_node_id: NodeID) -> bool:
         return remote_node_id in self._sessions

@@ -21,6 +21,7 @@ from typing import (
     TypeVar,
 )
 from urllib import parse as urlparse
+import uuid
 
 from async_service import ServiceAPI
 from eth_keys import keys
@@ -185,6 +186,8 @@ class SessionAPI(ABC):
     is_initiator: bool
     last_message_at: float
 
+    session_id = uuid.UUID
+
     @abstractmethod
     def __init__(self,
                  local_private_key: keys.PrivateKey,
@@ -256,7 +259,7 @@ class PoolAPI(ABC):
         ...
 
     @abstractmethod
-    def remove_session(self, remote_node_id: NodeID) -> None:
+    def remove_session(self, session_id: uuid.UUID) -> None:
         ...
 
 
