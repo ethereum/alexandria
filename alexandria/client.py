@@ -301,31 +301,30 @@ class Client(Service, ClientAPI):
                                               request: MessageAPI[sedes.Serializable],
                                               response_payload_type: Type[TPayload],
                                               ) -> Tuple[MessageAPI[TPayload], ...]:
-        with trio.fail_after(60):
-            subscription = self.message_dispatcher.subscribe_request(request, response_payload_type)
-            with subscription:
-                responses = []
-                total_messages = None
-                while True:
-                    try:
-                        response = await subscription.receive()
-                    except trio.EndOfChannel:
-                        break
+        subscription = self.message_dispatcher.subscribe_request(request, response_payload_type)
+        with subscription:
+            responses = []
+            total_messages = None
+            while True:
+                try:
+                    response = await subscription.receive()
+                except trio.EndOfChannel:
+                    break
 
-                    if total_messages is None:
-                        total_messages = response.payload.total
-                    else:
-                        if response.payload.total != total_messages:
-                            raise ValidationError(
-                                f"Inconsistent total message count.  First message "
-                                f"indicated {total_messages} total message.  Message "
-                                f"#{len(responses)} indicated "
-                                f"{response.payload.total}."
-                            )
-                    responses.append(response)
-                    if len(responses) >= total_messages:
-                        break
-                return tuple(responses)
+                if total_messages is None:
+                    total_messages = response.payload.total
+                else:
+                    if response.payload.total != total_messages:
+                        raise ValidationError(
+                            f"Inconsistent total message count.  First message "
+                            f"indicated {total_messages} total message.  Message "
+                            f"#{len(responses)} indicated "
+                            f"{response.payload.total}."
+                        )
+                responses.append(response)
+                if len(responses) >= total_messages:
+                    break
+            return tuple(responses)
 
     #
     # Utilities
