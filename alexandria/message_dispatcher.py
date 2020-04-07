@@ -64,7 +64,7 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
                 #
                 # Subscriptions
                 #
-                channels = self._subscriptions[message.message_id]
+                channels = tuple(self._subscriptions[message.message_id])
                 self.logger.debug(
                     'Handling %d subscriptions for message: %s',
                     len(channels),
@@ -75,6 +75,8 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
                         send_channel.send_nowait(message)
                     except trio.WouldBlock:
                         self.logger.debug("Subscription channel full: %s", send_channel)
+                    except trio.BrokenResourceError:
+                        pass
 
     #
     # Utility
