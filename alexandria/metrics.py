@@ -130,6 +130,17 @@ class Metrics(Service):
         self.manager.run_daemon_task(self._report_event, self.client.events.handshake_complete)
         self.manager.run_daemon_task(self._report_event, self.client.events.handshake_timeout)
 
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_ping)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_pong)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_find_nodes)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_found_nodes)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_advertise)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_ack)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_locate)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_locations)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_retrieve)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_chunk)
+
         await self.manager.wait_finished()
 
     async def _continuously_report(self, frequency: int) -> None:

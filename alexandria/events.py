@@ -8,8 +8,16 @@ from alexandria.abc import Endpoint, SessionAPI  # noqa: F401
 from alexandria.abc import (
     EventAPI,
     EventsAPI,
+    MessageAPI,
     TAwaitable,
     TEventPayload,
+)
+from alexandria.payloads import (
+    Advertise, Ack,
+    Retrieve, Chunk,
+    FindNodes, FoundNodes,
+    Locate, Locations,
+    Ping, Pong,
 )
 
 
@@ -69,3 +77,18 @@ class Events(EventsAPI):
 
         self.handshake_complete: Event[SessionAPI] = Event('handshake-complete')
         self.handshake_timeout: Event[SessionAPI] = Event('handshake-timeout')
+
+        self.sent_ping: Event[MessageAPI[Ping]] = Event('sent-Ping')
+        self.sent_pong: Event[MessageAPI[Pong]] = Event('sent-Pong')
+
+        self.sent_find_nodes: Event[MessageAPI[FindNodes]] = Event('sent-FindNodes')
+        self.sent_found_nodes: Event[MessageAPI[FoundNodes]] = Event('sent-FoundNodes')
+
+        self.sent_advertise: Event[MessageAPI[Advertise]] = Event('sent-Advertise')
+        self.sent_ack: Event[MessageAPI[Ack]] = Event('sent-Ack')
+
+        self.sent_locate: Event[MessageAPI[Locate]] = Event('sent-Locate')
+        self.sent_locations: Event[MessageAPI[Locations]] = Event('sent-Locations')
+
+        self.sent_retrieve: Event[MessageAPI[Retrieve]] = Event('sent-Retrieve')
+        self.sent_chunk: Event[MessageAPI[Chunk]] = Event('sent-Chunk')

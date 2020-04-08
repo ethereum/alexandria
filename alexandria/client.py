@@ -121,6 +121,7 @@ class Client(Service, ClientAPI):
         )
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
+        await self.events.sent_ping.trigger(message)
         return request_id
 
     async def send_pong(self, node: Node, *, request_id: int) -> None:
@@ -129,6 +130,7 @@ class Client(Service, ClientAPI):
             node,
         )
         self.logger.debug("Sending %s", message)
+        await self.events.sent_pong.trigger(message)
         await self.message_dispatcher.send_message(message)
 
     async def send_find_nodes(self, node: Node, *, distance: int) -> int:
@@ -139,6 +141,7 @@ class Client(Service, ClientAPI):
         )
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
+        await self.events.sent_find_nodes.trigger(message)
         return request_id
 
     async def send_found_nodes(self,
@@ -160,6 +163,7 @@ class Client(Service, ClientAPI):
                     node,
                 )
                 await self.message_dispatcher.send_message(response)
+                await self.events.sent_found_nodes.trigger(response)
             return total_batches
         else:
             response = Message(
@@ -167,6 +171,7 @@ class Client(Service, ClientAPI):
                 node,
             )
             await self.message_dispatcher.send_message(response)
+            await self.events.sent_found_nodes.trigger(response)
             return 1
 
     #
@@ -180,6 +185,7 @@ class Client(Service, ClientAPI):
         )
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
+        await self.events.sent_advertise.trigger(message)
         return request_id
 
     async def send_ack(self, node: Node, *, request_id: int) -> None:
@@ -189,6 +195,7 @@ class Client(Service, ClientAPI):
         )
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
+        await self.events.sent_ack.trigger(message)
 
     async def send_locate(self, node: Node, *, key: bytes) -> int:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
@@ -198,6 +205,7 @@ class Client(Service, ClientAPI):
         )
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
+        await self.events.sent_locate.trigger(message)
         return request_id
 
     async def send_locations(self,
@@ -219,6 +227,7 @@ class Client(Service, ClientAPI):
                     node,
                 )
                 await self.message_dispatcher.send_message(response)
+                await self.events.sent_locations.trigger(response)
             return total_batches
         else:
             response = Message(
@@ -226,6 +235,7 @@ class Client(Service, ClientAPI):
                 node,
             )
             await self.message_dispatcher.send_message(response)
+            await self.events.sent_locations.trigger(response)
             return 1
 
     async def send_retrieve(self,
@@ -239,6 +249,7 @@ class Client(Service, ClientAPI):
         )
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
+        await self.events.sent_retrieve.trigger(message)
         return request_id
 
     async def send_chunks(self,
@@ -252,6 +263,7 @@ class Client(Service, ClientAPI):
                 node,
             )
             await self.message_dispatcher.send_message(response)
+            await self.events.sent_chunk.trigger(response)
             return 1
 
         all_chunks = split_data_to_chunks(CHUNK_MAX_SIZE, data)
@@ -263,6 +275,7 @@ class Client(Service, ClientAPI):
                 node,
             )
             await self.message_dispatcher.send_message(response)
+            await self.events.sent_chunk.trigger(response)
 
         return total_chunks
 

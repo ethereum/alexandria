@@ -27,7 +27,13 @@ from eth_utils import to_int, remove_0x_prefix
 from ssz import sedes
 import trio
 
-from alexandria.payloads import Ack, Chunk, FoundNodes, Locations, Pong
+from alexandria.payloads import (
+    Advertise, Ack,
+    Retrieve, Chunk,
+    FindNodes, FoundNodes,
+    Locate, Locations,
+    Ping, Pong,
+)
 from alexandria.typing import AES128Key, NodeID, Tag
 
 
@@ -286,6 +292,21 @@ class EventsAPI(ABC):
 
     handshake_complete: EventAPI[SessionAPI]
     handshake_timeout: EventAPI[SessionAPI]
+
+    sent_ping: EventAPI[MessageAPI[Ping]]
+    sent_pong: EventAPI[MessageAPI[Pong]]
+
+    sent_find_nodes: EventAPI[MessageAPI[FindNodes]]
+    sent_found_nodes: EventAPI[MessageAPI[FoundNodes]]
+
+    sent_advertise: EventAPI[MessageAPI[Advertise]]
+    sent_ack: EventAPI[MessageAPI[Ack]]
+
+    sent_locate: EventAPI[MessageAPI[Locate]]
+    sent_locations: EventAPI[MessageAPI[Locations]]
+
+    sent_retrieve: EventAPI[MessageAPI[Retrieve]]
+    sent_chunk: EventAPI[MessageAPI[Chunk]]
 
 
 class MessageDispatcherAPI(ServiceAPI):
