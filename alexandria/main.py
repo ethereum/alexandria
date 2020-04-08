@@ -35,6 +35,7 @@ ALEXANDRIA_HEADER = "\n".join((
 
 class Alexandria(Service):
     logger = logging.getLogger('alexandria')
+    metrics: Optional[Metrics]
 
     def __init__(self,
                  private_key: keys.PrivateKey,
@@ -125,7 +126,7 @@ async def main() -> None:
     durable_db_path = application_root_dir / 'durable-db'
     durable_db = DurableDB(durable_db_path)
 
-    metrics: Optional[argparse.Namespace]
+    metrics_args: Optional[argparse.Namespace]
     if args.enable_metrics:
         metrics_args = args
     else:

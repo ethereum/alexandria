@@ -647,4 +647,7 @@ class ContentManagerAPI(ABC):
 
 
 class KademliaAPI(ServiceAPI):
+    client: ClientAPI
+    network: NetworkAPI
+    routing_table: RoutingTableAPI
     content_manager: ContentManagerAPI

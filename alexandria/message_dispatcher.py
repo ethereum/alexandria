@@ -72,7 +72,7 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
                 )
                 for send_channel in channels:
                     try:
-                        send_channel.send_nowait(message)
+                        send_channel.send_nowait(message)  # type: ignore
                     except trio.WouldBlock:
                         self.logger.debug("Subscription channel full: %s", send_channel)
                     except trio.BrokenResourceError:

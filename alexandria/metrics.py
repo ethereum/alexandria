@@ -35,7 +35,7 @@ PAYLOAD_TYPES = (
 )
 
 
-class HostMetricsRegistry(MetricsRegistry):
+class HostMetricsRegistry(MetricsRegistry):  # type: ignore
     def __init__(self, host: str, clock: ModuleType = time) -> None:
         super().__init__(clock)
         self.host = host
@@ -47,7 +47,7 @@ class HostMetricsRegistry(MetricsRegistry):
             # We want every metric to include a 'host' identifier to be able to filter accordingly
             metrics[key]['host'] = self.host
 
-        return metrics
+        return metrics  # type: ignore
 
 
 class Metrics(Service):
@@ -136,7 +136,7 @@ class Metrics(Service):
         async for _ in every(frequency):
             self._reporter.report_now()
 
-    async def _report_event(self, event: EventAPI):
+    async def _report_event(self, event: EventAPI[Any]) -> None:
         counter = self._registry.counter(f'alexandria.messages/{event.name}.counter')
         meter = self._registry.meter(f'alexandria.messages/{event.name}.meter')
 
