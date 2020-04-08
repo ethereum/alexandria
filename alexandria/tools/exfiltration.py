@@ -1,13 +1,25 @@
-import itertools
-import pathlib
+import logging
+from typing import overload
 
+from eth_typing import Address, BlockNumber, Hash32
+from eth_utils import keccak, encode_hex, humanize_hash, to_canonical_address, big_endian_to_int
 import rlp
+from rlp import sedes
 import trio
 
 from web3 import Web3
-from web3.providers import IPCProvider
 
 from alexandria.logging import setup_logging
+from alexandria.w3 import get_w3
+
+logger = logging.getLogger('alexandria.tools.exfiltration')
+
+
+address = sedes.Binary.fixed_length(20, allow_empty=True)
+hash32 = sedes.Binary.fixed_length(32)
+uint32 = sedes.BigEndianInt(32)
+uint256 = sedes.BigEndianInt(256)
+trie_root = sedes.Binary.fixed_length(32, allow_empty=True)
 
 
 class BlockHeader(rlp.Serializable):
@@ -19,14 +31,14 @@ class BlockHeader(rlp.Serializable):
         ('transaction_root', trie_root),
         ('receipt_root', trie_root),
         ('bloom', uint256),
-        ('difficulty', big_endian_int),
-        ('block_number', big_endian_int),
-        ('gas_limit', big_endian_int),
-        ('gas_used', big_endian_int),
-        ('timestamp', big_endian_int),
-        ('extra_data', binary),
-        ('mix_hash', binary),
-        ('nonce', Binary(8, allow_empty=True))
+        ('difficulty', sedes.big_endian_int),
+        ('block_number', sedes.big_endian_int),
+        ('gas_limit', sedes.big_endian_int),
+        ('gas_used', sedes.big_endian_int),
+        ('timestamp', sedes.big_endian_int),
+        ('extra_data', sedes.binary),
+        ('mix_hash', sedes.binary),
+        ('nonce', sedes.Binary(8, allow_empty=True))
     ]
 
     @overload  # noqa: F811
@@ -34,18 +46,18 @@ class BlockHeader(rlp.Serializable):
                  difficulty: int,
                  block_number: BlockNumber,
                  gas_limit: int,
-                 timestamp: int=None,
-                 coinbase: Address=ZERO_ADDRESS,
-                 parent_hash: Hash32=ZERO_HASH32,
-                 uncles_hash: Hash32=EMPTY_UNCLE_HASH,
-                 state_root: Hash32=BLANK_ROOT_HASH,
-                 transaction_root: Hash32=BLANK_ROOT_HASH,
-                 receipt_root: Hash32=BLANK_ROOT_HASH,
-                 bloom: int=0,
-                 gas_used: int=0,
-                 extra_data: bytes=b'',
-                 mix_hash: Hash32=ZERO_HASH32,
-                 nonce: bytes=GENESIS_NONCE) -> None:
+                 timestamp: int,
+                 coinbase: Address,
+                 parent_hash: Hash32,
+                 uncles_hash: Hash32,
+                 state_root: Hash32,
+                 transaction_root: Hash32,
+                 receipt_root: Hash32,
+                 bloom: int,
+                 gas_used: int,
+                 extra_data: bytes,
+                 mix_hash: Hash32,
+                 nonce: bytes) -> None:
         ...
 
     def __init__(self,              # type: ignore  # noqa: F811
@@ -63,9 +75,7 @@ class BlockHeader(rlp.Serializable):
                  gas_used: int,
                  extra_data: bytes,
                  mix_hash: Hash32,
-                 nonce: bytes=GENESIS_NONCE) -> None:
-        if timestamp is None:
-            timestamp = int(time.time())
+                 nonce: bytes) -> None:
         super().__init__(
             parent_hash=parent_hash,
             uncles_hash=uncles_hash,
@@ -87,7 +97,7 @@ class BlockHeader(rlp.Serializable):
     def __str__(self) -> str:
         return '<BlockHeader #{0} {1}>'.format(
             self.block_number,
-            encode_hex(self.hash)[2:10],
+            humanize_hash(self.hash),
         )
 
     _hash = None
@@ -99,93 +109,102 @@ class BlockHeader(rlp.Serializable):
         return self._hash
 
     @property
-    def mining_hash(self) -> Hash32:
-        return keccak(rlp.encode(self[:-2], MiningHeader))
-
-    @property
     def hex_hash(self) -> str:
         return encode_hex(self.hash)
 
-    @classmethod
-    def from_parent(cls,
-                    parent: BlockHeaderAPI,
-                    gas_limit: int,
-                    difficulty: int,
-                    timestamp: int,
-                    coinbase: Address=ZERO_ADDRESS,
-                    nonce: bytes=None,
-                    extra_data: bytes=None,
-                    transaction_root: bytes=None,
-                    receipt_root: bytes=None) -> BlockHeaderAPI:
-        """
-        Initialize a new block header with the `parent` header as the block's
-        parent hash.
-        """
-        header_kwargs: Dict[str, HeaderParams] = {
-            'parent_hash': parent.hash,
-            'coinbase': coinbase,
-            'state_root': parent.state_root,
-            'gas_limit': gas_limit,
-            'difficulty': difficulty,
-            'block_number': parent.block_number + 1,
-            'timestamp': timestamp,
-        }
-        if nonce is not None:
-            header_kwargs['nonce'] = nonce
-        if extra_data is not None:
-            header_kwargs['extra_data'] = extra_data
-        if transaction_root is not None:
-            header_kwargs['transaction_root'] = transaction_root
-        if receipt_root is not None:
-            header_kwargs['receipt_root'] = receipt_root
 
-        header = cls(**header_kwargs)
-        return header
-
-    def create_execution_context(self,
-                                 prev_hashes: Iterable[Hash32],
-                                 chain_context: ChainContext) -> ExecutionContext:
-
-        return ExecutionContext(
-            coinbase=self.coinbase,
-            timestamp=self.timestamp,
-            block_number=self.block_number,
-            difficulty=self.difficulty,
-            gas_limit=self.gas_limit,
-            prev_hashes=prev_hashes,
-            chain_id=chain_context.chain_id,
-        )
-
-    @property
-    def is_genesis(self) -> bool:
-        # if removing the block_number == 0 test, consider the validation consequences.
-        # validate_header stops trying to check the current header against a parent header.
-        # Can someone trick us into following a high difficulty header with genesis parent hash?
-        return self.parent_hash == GENESIS_PARENT_HASH and self.block_number == 0
+def get_header_key(genesis_hash: Hash32, header: BlockHeader) -> bytes:
+    return b'%s/header/%s' % (genesis_hash, header.hash)
 
 
-def get_w3(ipc_path: pathlib.Path = None) -> Web3:
-    if ipc_path is None:
-        ipc_path = get_xdg_alexandria_root() / 'jsonrpc.ipc'
+async def exfiltrate_headers(w3_eth: Web3,
+                             w3_alexandria: Web3,
+                             start_at: int,
+                             end_at: int):
+    genesis = await retrieve_header(w3_eth, 0)
+    async with trio.open_nursery() as nursery:
+        (
+            send_channel,
+            receive_channel,
+        ) = trio.open_memory_channel[BlockHeader](0)
+        logger.info('Starting exfiltration')
+        nursery.start_soon(retrieve_headers, w3_eth, start_at, end_at, send_channel)
+        async with receive_channel:
+            async for header in receive_channel:
+                await push_header_to_alexandria(w3_alexandria, genesis.hash, header)
+                logger.info('Exfiltrated #%s', header.block_number)
 
-    provider = IPCProvider(str(ipc_path))
-    w3 = Web3(provider=provider, modules={'alexandria': (AlexandriaModule,)})
-    return w3
+
+async def push_header_to_alexandria(w3: Web3, genesis_hash: Hash32, header: BlockHeader) -> None:
+    await trio.to_thread.run_sync(
+        _push_header_to_alexandria,
+        w3,
+        genesis_hash,
+        header,
+    )
 
 
-async def exfiltrate_headers(w3: Web3,
-                             export_db: DurableDatabaseAPI,
-                             start_at: int):
-    (
-        header_range_send_channel,
-        header_range_receive_channel,
-    ) = trio.open_memory_channel['HeaderRange'][0]
+def _push_header_to_alexandria(w3: Web3, genesis_hash: Hash32, header: BlockHeader) -> None:
+    key = get_header_key(genesis_hash, header)
+    header_rlp = rlp.encode(header)
+    w3.alexandria.add_content(key, header_rlp, is_ephemeral=True)
+    logger.debug(
+        'Header #%d pushed to Alexandria under key: %s',
+        header.block_number,
+        encode_hex(key),
+    )
+
+
+async def retrieve_headers(w3: Web3,
+                           start_at: int,
+                           end_at: int,
+                           send_channel: trio.abc.SendChannel[BlockHeader],
+                           request_rate: int = 3) -> None:
+    semaphor = trio.Semaphore(request_rate, max_value=request_rate)
+
+    async def _fetch(block_number: int):
+        header = await retrieve_header(w3, block_number)
+        semaphor.release()
+        await send_channel.send(header)
+
+    async with send_channel:
+        async with trio.open_nursery() as nursery:
+            logger.debug('Starting retrieval of headers %d-%d', start_at, end_at)
+            for block_number in range(start_at, end_at):
+                await semaphor.acquire()
+                nursery.start_soon(_fetch, block_number)
 
 
 async def retrieve_header(w3: Web3, block_number: int) -> BlockHeader:
-    ...
+    logger.debug('Retrieving header #%d', block_number)
+    fancy_header = await trio.to_thread.run_sync(w3.eth.getBlock, block_number)
+    header = BlockHeader(
+        difficulty=fancy_header['difficulty'],
+        block_number=fancy_header['number'],
+        gas_limit=fancy_header['gasLimit'],
+        timestamp=fancy_header['timestamp'],
+        coinbase=to_canonical_address(fancy_header['miner']),
+        parent_hash=bytes(fancy_header['parentHash']),
+        uncles_hash=bytes(fancy_header['sha3Uncles']),
+        state_root=bytes(fancy_header['stateRoot']),
+        transaction_root=bytes(fancy_header['transactionsRoot']),
+        receipt_root=bytes(fancy_header['receiptsRoot']),
+        bloom=big_endian_to_int(bytes(fancy_header['logsBloom'])),
+        gas_used=fancy_header['gasUsed'],
+        extra_data=bytes(fancy_header['extraData']),
+        mix_hash=bytes(fancy_header['mixHash']),
+        nonce=bytes(fancy_header['nonce']),
+    )
+    if header.hash != fancy_header['hash']:
+        raise ValueError(
+            f"Reconstructed header hash does not match expected: "
+            f"expected={fancy_header['hash']}  actual={header.hex_hash}"
+        )
+    return header
 
 
 if __name__ == '__main__':
-    setup_logging()
-    trio.run(exfiltrate_headers)
+    setup_logging(logging.INFO)
+    w3_alexandria = get_w3()
+    from web3.auto.ipc import w3 as w3_eth
+    trio.run(exfiltrate_headers, w3_eth, w3_alexandria, 8601, 10000)

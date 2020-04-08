@@ -532,6 +532,10 @@ class DurableDatabaseAPI(Sized):
         ...
 
     @abstractmethod
+    def has(self, key: bytes) -> bool:
+        ...
+
+    @abstractmethod
     def get(self, key: bytes) -> bytes:
         ...
 
@@ -555,6 +559,10 @@ class ContentDatabaseAPI(Sized):
 
     @abstractmethod
     def keys(self) -> KeysView[bytes]:
+        ...
+
+    @abstractmethod
+    def has(self, key: bytes) -> bool:
         ...
 
     @abstractmethod

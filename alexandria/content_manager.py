@@ -3,6 +3,7 @@ import functools
 import itertools
 import logging
 import random
+import threading
 from typing import (
     Collection,
     Deque,
@@ -73,6 +74,7 @@ class EphemeralDB(BaseContentDB):
         self.center_id = center_id
         self.capacity = capacity
         self.total_capacity = capacity
+        self.eviction_lock = threading.Lock()
 
     def __len__(self) -> int:
         return len(self._db)
@@ -84,15 +86,19 @@ class EphemeralDB(BaseContentDB):
         if self.capacity >= 0:
             return
 
-        for key in iter_furthest_keys(self.center_id, self._db.keys()):
-            content_id = content_key_to_node_id(key)
-            evict_probability = get_eviction_probability(self.center_id, content_id)
-            should_evict = random.random() < evict_probability
-            if should_evict:
-                self.delete(key)
+        with self.eviction_lock:
+            for key in iter_furthest_keys(self.center_id, self._db.keys()):
+                content_id = content_key_to_node_id(key)
+                evict_probability = get_eviction_probability(self.center_id, content_id)
+                should_evict = random.random() < evict_probability
+                if should_evict:
+                    self.delete(key)
 
                 if self.capacity >= 0:
                     break
+
+    def has(self, key: bytes) -> bool:
+        return key in self._db
 
     def get(self, key: bytes) -> bytes:
         return self._db[key]
@@ -131,6 +137,7 @@ class EphemeralIndex(ContentIndexAPI):
         self.center_id = center_id
         self.capacity = capacity
         self.total_capacity = capacity
+        self.eviction_lock = threading.Lock()
 
     def __len__(self) -> int:
         return sum(len(index) for index in self._indices.values())
@@ -139,20 +146,21 @@ class EphemeralIndex(ContentIndexAPI):
         if self.capacity >= 0:
             return
 
-        for content_id in iter_furthest_content_ids(self.center_id, self._indices.keys()):
-            evict_probability = get_eviction_probability(self.center_id, content_id)
-            should_evict = random.random() < evict_probability
-            if should_evict:
-                index = self._indices[content_id]
-                for location_id in iter_furthest_content_ids(content_id, index):
-                    index.remove(location_id)
-                    self.capacity += 1
+        with self.eviction_lock:
+            for content_id in iter_furthest_content_ids(self.center_id, self._indices.keys()):
+                evict_probability = get_eviction_probability(self.center_id, content_id)
+                should_evict = random.random() < evict_probability
+                if should_evict:
+                    index = self._indices[content_id]
+                    for location_id in iter_furthest_content_ids(content_id, index):
+                        index.remove(location_id)
+                        self.capacity += 1
 
-                    if len(index) == 0:
-                        self._indices.pop(content_id)
+                        if len(index) == 0:
+                            self._indices.pop(content_id)
 
-                    if self.capacity >= 0:
-                        break
+                        if self.capacity >= 0:
+                            break
                 if self.capacity >= 0:
                     break
 
@@ -231,6 +239,9 @@ class CacheDB(BaseContentDB):
                 return content
         else:
             raise KeyError(key)
+
+    def has(self, key: bytes) -> bool:
+        return key in self.cache_db
 
     def get(self, key: bytes) -> bytes:
         content = self._get_record(key)

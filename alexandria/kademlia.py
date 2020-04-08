@@ -260,8 +260,13 @@ class Kademlia(Service, KademliaAPI):
                 )
 
     def _check_interest_in_ephemeral_content(self, key: bytes) -> bool:
-        if self.content_manager.ephemeral_db.has_capacity:
+        if self.content_manager.durable_db.has(key):
+            return False
+        elif self.content_manager.ephemeral_db.has(key):
+            return False
+        elif self.content_manager.ephemeral_db.has_capacity:
             return True
+
         content_id = content_key_to_node_id(key)
         content_distance = compute_distance(content_id, self.client.local_node_id)
         furthest_key = sorted(

@@ -142,6 +142,8 @@ class RPCServer(Service):
         namespaced_method = request['method']
         params = request.get('params', [])
 
+        self.logger.debug('RPCServer handling request: %s', namespaced_method)
+
         namespace, _, method = namespaced_method.partition('_')
         if namespace != 'alexandria':
             return generate_response(request, None, f"Invalid namespace: {namespaced_method}")
