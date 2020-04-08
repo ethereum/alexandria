@@ -125,21 +125,21 @@ class Metrics(Service):
         for payload_type in PAYLOAD_TYPES:
             self.manager.run_daemon_task(self._report_inbound_message_stats, payload_type)
 
-        self.manager.run_daemon_task(self._report_event, self.client.events.session_created)
-        self.manager.run_daemon_task(self._report_event, self.client.events.session_idle)
-        self.manager.run_daemon_task(self._report_event, self.client.events.handshake_complete)
-        self.manager.run_daemon_task(self._report_event, self.client.events.handshake_timeout)
+        self.manager.run_daemon_task(self._report_event, self.client.events.session_created, 'events/session-created')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.session_idle, 'events/session-idle')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.handshake_complete, 'events/handshake-complete')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.handshake_timeout, 'events/handshake-timeout')  # noqa: E501
 
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_ping)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_pong)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_find_nodes)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_found_nodes)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_advertise)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_ack)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_locate)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_locations)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_retrieve)
-        self.manager.run_daemon_task(self._report_event, self.client.events.sent_chunk)
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_ping, 'messages/outbound/Ping')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_pong, 'messages/outbound/Pong')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_find_nodes, 'messages/outbound/FindNodes')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_found_nodes, 'messages/outbound/FoundNodes')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_advertise, 'messages/outbound/Advertise')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_ack, 'messages/outbound/Ack')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_locate, 'messages/outbound/Locate')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_locations, 'messages/outbound/Locations')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_retrieve, 'messages/outbound/Retrieve')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.sent_chunk, 'messages/outbound/Chunk')  # noqa: E501
 
         await self.manager.wait_finished()
 
@@ -147,9 +147,9 @@ class Metrics(Service):
         async for _ in every(frequency):
             self._reporter.report_now()
 
-    async def _report_event(self, event: EventAPI[Any]) -> None:
-        counter = self._registry.counter(f'alexandria.messages/{event.name}.counter')
-        meter = self._registry.meter(f'alexandria.messages/{event.name}.meter')
+    async def _report_event(self, event: EventAPI[Any], suffix: str) -> None:
+        counter = self._registry.counter(f'alexandria.{suffix}.counter')
+        meter = self._registry.meter(f'alexandria.{suffix}.meter')
 
         async with event.subscribe() as subscription:
             async for _ in subscription:
