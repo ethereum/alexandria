@@ -127,6 +127,7 @@ async def push_header_to_alexandria(w3: Web3,
         w3,
         genesis_hash,
         header,
+        is_ephemeral,
     )
 
 
