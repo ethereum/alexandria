@@ -1,9 +1,10 @@
+import argparse
 import ipaddress
 import logging
 import os
 import pathlib
 import secrets
-from typing import Collection, Mapping
+from typing import Collection, Optional
 
 from async_service import background_trio_service, Service
 from eth_keys import keys
@@ -16,6 +17,7 @@ from alexandria.cli_parser import parser
 from alexandria.config import DEFAULT_CONFIG, KademliaConfig
 from alexandria.durable_db import DurableDB
 from alexandria.logging import setup_logging
+from alexandria.metrics import Metrics
 from alexandria.rpc import RPCServer
 from alexandria.xdg import get_xdg_alexandria_root
 
@@ -41,6 +43,7 @@ class Alexandria(Service):
                  durable_db: DurableDatabaseAPI,
                  kademlia_config: KademliaConfig,
                  ipc_path: pathlib.Path,
+                 metrics_args: argparse.Namespace = None,
                  ) -> None:
         self.application = Application(
             bootnodes=bootnodes,
@@ -56,11 +59,21 @@ class Alexandria(Service):
             kademlia=self.application.kademlia,
             routing_table=self.application.routing_table,
         )
+        if metrics_args is not None:
+            self.metrics = Metrics.from_cli_args(
+                metrics_args,
+                client=self.application.client,
+                kademlia=self.application.kademlia,
+            )
+        else:
+            self.metrics = None
 
     async def run(self) -> None:
         self.logger.info("Node: %s", self.application.client.local_node.node_uri)
         self.manager.run_daemon_child_service(self.application)
         self.manager.run_daemon_child_service(self.json_rpc_server)
+        if self.metrics is not None:
+            self.manager.run_daemon_child_service(self.metrics)
         await self.manager.wait_finished()
 
 
@@ -112,6 +125,12 @@ async def main() -> None:
     durable_db_path = application_root_dir / 'durable-db'
     durable_db = DurableDB(durable_db_path)
 
+    metrics: Optional[argparse.Namespace]
+    if args.enable_metrics:
+        metrics_args = args
+    else:
+        metrics_args = None
+
     alexandria = Alexandria(
         private_key=private_key,
         listen_on=listen_on,
@@ -119,6 +138,7 @@ async def main() -> None:
         durable_db=durable_db,
         kademlia_config=DEFAULT_CONFIG,
         ipc_path=ipc_path,
+        metrics_args=metrics_args,
     )
 
     logger.info(ALEXANDRIA_HEADER)

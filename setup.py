@@ -67,6 +67,8 @@ setup(
         "eth-keys==0.2.4",
         "eth-utils>=1,<2",
         "plyvel==1.2.0",
+        "psutil==5.7.0",
+        "pyformance==0.4",
         "ssz==0.2.4",
         "trio==0.13.0",
         "trio-typing==0.3.0",

@@ -2,8 +2,6 @@ from abc import ABC, abstractmethod
 import ipaddress
 from typing import (
     AsyncContextManager,
-    AsyncIterable,
-    Awaitable,
     Collection,
     Deque,
     FrozenSet,
@@ -265,27 +263,18 @@ TItem = TypeVar('TItem')
 TAwaitable = TypeVar('TAwaitable')
 
 
-class EventSubscriptionAPI(Awaitable[TAwaitable],
-                           AsyncContextManager['EventSubscriptionAPI[TAwaitable]']):
-    @abstractmethod
-    async def receive(self) -> TAwaitable:
-        ...
-
-    @abstractmethod
-    def stream(self) -> AsyncIterable[TAwaitable]:
-        ...
-
-
 TEventPayload = TypeVar('TEventPayload')
 
 
 class EventAPI(Generic[TEventPayload]):
+    name: str
+
     @abstractmethod
     async def trigger(self, payload: TEventPayload) -> None:
         ...
 
     @abstractmethod
-    def subscribe(self) -> EventSubscriptionAPI[TEventPayload]:
+    def subscribe(self) -> AsyncContextManager[trio.abc.ReceiveChannel[TEventPayload]]:
         ...
 
 
