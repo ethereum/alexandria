@@ -161,7 +161,6 @@ class Metrics(Service):
         async for _ in every(frequency):
             stats = self.kademlia.routing_table.get_stats()
             size_gauge.set_value(stats.total_nodes)
-            self.logger.debug('Reported routing table metrics')
 
     async def _report_inbound_message_stats(self, payload_type: Type[ssz.Serializable]) -> None:
         name = payload_type.__name__
@@ -216,7 +215,6 @@ class Metrics(Service):
             cache_index_size_gauge.set_value(
                 stats.cache_index_total_capacity - stats.cache_index_capacity
             )
-            self.logger.debug('Reported content metrics')
 
     async def _collect_system_metrics(self, frequency: int) -> None:
         cpu_sysload_gauge = self._registry.gauge('alexandria.system/cpu/sysload.gauge')
@@ -257,4 +255,3 @@ class Metrics(Service):
             network_out_packets_meter.mark(out_packets)
 
             previous = current
-            self.logger.debug('Reported system metrics')

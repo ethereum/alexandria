@@ -109,7 +109,7 @@ async def exfiltrate_headers(w3_eth: Web3,
         (
             send_channel,
             receive_channel,
-        ) = trio.open_memory_channel[BlockHeader](0)
+        ) = trio.open_memory_channel[BlockHeader](32)
         logger.info('Starting exfiltration')
         nursery.start_soon(retrieve_headers, w3_eth, start_at, end_at, send_channel)
         async with receive_channel:

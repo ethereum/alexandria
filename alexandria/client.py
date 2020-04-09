@@ -130,8 +130,8 @@ class Client(Service, ClientAPI):
             node,
         )
         self.logger.debug("Sending %s", message)
-        await self.events.sent_pong.trigger(message)
         await self.message_dispatcher.send_message(message)
+        await self.events.sent_pong.trigger(message)
 
     async def send_find_nodes(self, node: Node, *, distance: int) -> int:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
@@ -286,28 +286,33 @@ class Client(Service, ClientAPI):
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Ping(request_id), node)
         async with self.message_dispatcher.subscribe_request(message, Pong) as subscription:
+            await self.events.sent_ping.trigger(message)
             return await subscription.receive()
 
     async def find_nodes(self, node: Node, *, distance: int) -> Tuple[MessageAPI[FoundNodes], ...]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(FindNodes(request_id, distance), node)
+        await self.events.sent_find_nodes.trigger(message)
         return await self._do_request_with_multi_response(message, FoundNodes)
 
     async def advertise(self, node: Node, *, key: bytes, who: Node) -> MessageAPI[Ack]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Advertise(request_id, key, who.to_payload()), node)
         async with self.message_dispatcher.subscribe_request(message, Ack) as subscription:
+            await self.events.sent_advertise.trigger(message)
             return await subscription.receive()
 
     async def locate(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Locations], ...]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Locate(request_id, key), node)
+        await self.events.sent_locate.trigger(message)
         return await self._do_request_with_multi_response(message, Locations)
 
     async def retrieve(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Chunk], ...]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Retrieve(request_id, key), node)
         responses = await self._do_request_with_multi_response(message, Chunk)
+        await self.events.sent_retrieve.trigger(message)
         return tuple(sorted(responses, key=lambda response: response.payload.index))
 
     async def _do_request_with_multi_response(self,
