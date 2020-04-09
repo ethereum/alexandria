@@ -200,6 +200,9 @@ class RPCServer(Service):
         with socket:
             while True:
                 data = await socket.recv(1024)
+                if not data:
+                    await trio.sleep(0.05)
+                    continue
                 buffer.write(data.decode())
 
                 bad_prefix, raw_request = strip_non_json_prefix(buffer.getvalue())
