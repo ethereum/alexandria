@@ -9,8 +9,9 @@ from typing import Collection, Optional
 from async_service import background_trio_service, Service
 from eth_keys import keys
 from eth_utils import encode_hex, decode_hex
+import trio
 
-from alexandria._utils import sha256
+from alexandria._utils import sha256, every
 from alexandria.abc import Endpoint, Node, DurableDatabaseAPI
 from alexandria.app import Application
 from alexandria.cli_parser import parser
@@ -19,6 +20,7 @@ from alexandria.durable_db import DurableDB
 from alexandria.logging import setup_logging
 from alexandria.metrics import Metrics
 from alexandria.rpc import RPCServer
+from alexandria.upnp import setup_port_map, UPNP_PORTMAP_DURATION, PortMapFailed
 from alexandria.xdg import get_xdg_alexandria_root
 
 ALEXANDRIA_HEADER = "\n".join((
@@ -71,11 +73,29 @@ class Alexandria(Service):
 
     async def run(self) -> None:
         self.logger.info("Node: %s", self.application.client.local_node.node_uri)
+        self.manager.run_daemon_task(self._manage_upnp)
         self.manager.run_daemon_child_service(self.application)
         self.manager.run_daemon_child_service(self.json_rpc_server)
         if self.metrics is not None:
             self.manager.run_daemon_child_service(self.metrics)
         await self.manager.wait_finished()
+
+    async def _manage_upnp(self) -> None:
+        while self.manager.is_running:
+            async for _ in every(UPNP_PORTMAP_DURATION):
+                try:
+                    internal_ip, external_ip = await trio.to_thread.run_sync(
+                        setup_port_map,
+                        self.application.client.listen_on.port,
+                        UPNP_PORTMAP_DURATION,
+                    )
+                except PortMapFailed:
+                    continue
+                external_endpoint = Endpoint(
+                    ipaddress.IPv4Address(external_ip),
+                    self.application.client.listen_on.port,
+                )
+                await self.application.client.events.new_external_ip.trigger(external_endpoint)
 
 
 DEFAULT_BOOTNODES = (

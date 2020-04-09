@@ -304,7 +304,7 @@ class Kademlia(Service, KademliaAPI):
                 return self.endpoint_db.get_endpoint(node_id)
             except KeyError:
                 if node_id == self.client.local_node_id:
-                    return self.client.listen_on
+                    return self.client.external_endpoint
                 else:
                     raise
 

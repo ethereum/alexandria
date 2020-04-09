@@ -287,6 +287,7 @@ class EventAPI(Generic[TEventPayload]):
 
 class EventsAPI(ABC):
     listening: EventAPI[Endpoint]
+    new_external_ip: EventAPI[Endpoint]
 
     session_created: EventAPI[SessionAPI]
     session_idle: EventAPI[SessionAPI]
@@ -354,6 +355,11 @@ class ClientAPI(ServiceAPI):
     events: EventsAPI
     message_dispatcher: MessageDispatcherAPI
     pool: PoolAPI
+
+    @property
+    @abstractmethod
+    def external_endpoint(self) -> Endpoint:
+        ...
 
     @abstractmethod
     async def wait_ready(self) -> None:

@@ -1,5 +1,5 @@
 import logging
-from typing import Collection, Tuple, Type
+from typing import Collection, Optional, Tuple, Type
 
 from async_service import Service, background_trio_service
 from eth_keys import keys
@@ -50,6 +50,7 @@ from alexandria.tags import recover_source_id_from_tag
 
 class Client(Service, ClientAPI):
     logger = logging.getLogger('alexandria.client.Client')
+    _external_endpoint: Optional[Endpoint] = None
 
     def __init__(self,
                  private_key: keys.PrivateKey,
@@ -106,6 +107,13 @@ class Client(Service, ClientAPI):
         )
 
         self._ready = trio.Event()
+
+    @property
+    def external_endpoint(self) -> Endpoint:
+        if self._external_endpoint is None:
+            return self.listen_on
+        else:
+            return self._external_endpoint
 
     async def wait_ready(self) -> None:
         await self._ready.wait()
@@ -405,6 +413,12 @@ class Client(Service, ClientAPI):
 
             self._ready.set()
             await self.manager.wait_finished()
+
+    async def _listen_for_external_endpoint(self) -> None:
+        async with self.events.new_external_ip.subscribe() as subscription:
+            async for endpoint in subscription:
+                self.logger.info("New External Endpoint: %s", endpoint)
+                self._external_endpoint = endpoint
 
     async def _periodically_ping_sessions(self) -> None:
         async for _ in every(SESSION_IDLE_TIMEOUT):

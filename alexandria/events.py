@@ -72,6 +72,7 @@ class Event(EventAPI[TEventPayload]):
 class Events(EventsAPI):
     def __init__(self) -> None:
         self.listening: EventAPI[Endpoint] = Event('listening')
+        self.new_external_ip: EventAPI[Endpoint] = Event('new-external-ip')
 
         self.session_created: EventAPI[SessionAPI] = Event('session-created')
         self.session_idle: EventAPI[SessionAPI] = Event('session-idle')
