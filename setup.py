@@ -64,6 +64,7 @@ setup(
         "async-generator==1.10",
         "async-service==0.1.0a7",
         "coincurve==10.0.0",
+        "cryptography>=2.9,<3",
         "eth-keys==0.2.4",
         "eth-utils>=1,<2",
         "plyvel==1.2.0",
