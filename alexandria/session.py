@@ -250,7 +250,6 @@ class SessionInitiator(BaseSession):
         ephemeral_private_key = keys.PrivateKey(secrets.token_bytes(32))
 
         self.remote_public_key = packet.public_key
-        self.remote_public_key = packet.header.public_key
         expected_remote_node_id = public_key_to_node_id(self.remote_public_key)
         if expected_remote_node_id != self.remote_node_id:
             raise ValidationError(
