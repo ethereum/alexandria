@@ -196,12 +196,13 @@ async def retrieve_header(w3: Web3, block_number: int) -> BlockHeader:
 parser = argparse.ArgumentParser(description='Block Header Exfiltration')
 parser.add_argument('--start-at', type=int)
 parser.add_argument('--end-at', type=int)
+parser.add_argument('--log-level', type=int, default=logging.INFO)
 parser.add_argument('--durable', action="store_true", default=False)
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    setup_logging(logging.INFO)
+    setup_logging(args.log_level)
     w3_alexandria = get_w3()
     from web3.auto.ipc import w3 as w3_eth
     trio.run(

@@ -158,10 +158,6 @@ class Metrics(Service):
             async for _ in subscription:
                 counter.inc()
                 meter.mark()
-                if event.name == 'session-idle':
-                    self.logger.info('IT HAPPENED: %s:%s', 'session-idle', _)
-                if event.name == 'handshake-timeout':
-                    self.logger.info('IT HAPPENED: %s:%s', 'handshake-timeout', _)
 
     async def _report_routing_table_stats(self, frequency: int) -> None:
         size_gauge = self._registry.gauge('alexandria.dht/routing-table/total-nodes.gauge')
