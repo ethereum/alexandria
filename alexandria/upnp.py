@@ -21,7 +21,7 @@ class NoInternalAddressMatchesDevice(Exception):
 
 # UPnP discovery can take a long time, so use a loooong timeout here.
 UPNP_DISCOVER_TIMEOUT_SECONDS = 30
-UPNP_PORTMAP_DURATION = 30
+UPNP_PORTMAP_DURATION = 30 * 60  # 30 minutes
 
 
 logger = logging.getLogger('alexandria.upnp')
