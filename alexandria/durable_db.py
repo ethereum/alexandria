@@ -34,7 +34,7 @@ class DurableDB(DurableDatabaseAPI):
         return collections.KeysView(self.db.iterator(include_value=False))
 
     def has(self, key: bytes) -> bool:
-        return self.db.get(key) is None
+        return self.db.get(key) is not None
 
     def get(self, key: bytes) -> bytes:
         data = self.db.get(key)

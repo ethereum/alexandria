@@ -186,6 +186,7 @@ class SessionAPI(ABC):
     remote_node: Node
     remote_node_id: NodeID
     remote_endpoint: Endpoint
+    remote_public_key: keys.PublicKey
 
     is_initiator: bool
     last_message_at: float
@@ -292,6 +293,9 @@ class EventsAPI(ABC):
 
     handshake_complete: EventAPI[SessionAPI]
     handshake_timeout: EventAPI[SessionAPI]
+
+    datagram_sent: EventAPI[Datagram]
+    datagram_received: EventAPI[Datagram]
 
     sent_ping: EventAPI[MessageAPI[Ping]]
     sent_pong: EventAPI[MessageAPI[Pong]]

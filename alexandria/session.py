@@ -249,6 +249,15 @@ class SessionInitiator(BaseSession):
         # compute session keys
         ephemeral_private_key = keys.PrivateKey(secrets.token_bytes(32))
 
+        self.remote_public_key = packet.public_key
+        self.remote_public_key = packet.header.public_key
+        expected_remote_node_id = public_key_to_node_id(self.remote_public_key)
+        if expected_remote_node_id != self.remote_node_id:
+            raise ValidationError(
+                f"Remote node ids does not match expected node id: "
+                f"{self.remote_node_id} != {self.remote_node_id}"
+            )
+
         session_keys = compute_session_keys(
             local_private_key=ephemeral_private_key,
             remote_public_key=packet.public_key,
@@ -400,6 +409,14 @@ class SessionRecipient(BaseSession):
         if remote_node_id != self.remote_node_id:
             raise ValidationError(
                 f"Remote node ids do not match: {remote_node_id} != {self.remote_node_id}"
+            )
+
+        self.remote_public_key = packet.header.public_key
+        expected_remote_node_id = public_key_to_node_id(self.remote_public_key)
+        if expected_remote_node_id != remote_node_id:
+            raise ValidationError(
+                f"Remote node ids does not match expected node id: "
+                f"{remote_node_id} != {self.remote_node_id}"
             )
 
         ephemeral_public_key = packet.header.ephemeral_public_key

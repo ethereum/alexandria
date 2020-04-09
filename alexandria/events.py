@@ -6,6 +6,7 @@ import trio
 
 from alexandria.abc import Endpoint, SessionAPI  # noqa: F401
 from alexandria.abc import (
+    Datagram,
     EventAPI,
     EventsAPI,
     MessageAPI,
@@ -70,25 +71,28 @@ class Event(EventAPI[TEventPayload]):
 
 class Events(EventsAPI):
     def __init__(self) -> None:
-        self.listening: Event[Endpoint] = Event('listening')
+        self.listening: EventAPI[Endpoint] = Event('listening')
 
-        self.session_created: Event[SessionAPI] = Event('session-created')
-        self.session_idle: Event[SessionAPI] = Event('session-idle')
+        self.session_created: EventAPI[SessionAPI] = Event('session-created')
+        self.session_idle: EventAPI[SessionAPI] = Event('session-idle')
 
-        self.handshake_complete: Event[SessionAPI] = Event('handshake-complete')
-        self.handshake_timeout: Event[SessionAPI] = Event('handshake-timeout')
+        self.handshake_complete: EventAPI[SessionAPI] = Event('handshake-complete')
+        self.handshake_timeout: EventAPI[SessionAPI] = Event('handshake-timeout')
 
-        self.sent_ping: Event[MessageAPI[Ping]] = Event('sent-Ping')
-        self.sent_pong: Event[MessageAPI[Pong]] = Event('sent-Pong')
+        self.datagram_sent: EventAPI[Datagram] = Event('datagram-sent')
+        self.datagram_received: EventAPI[Datagram] = Event('datagram-received')
 
-        self.sent_find_nodes: Event[MessageAPI[FindNodes]] = Event('sent-FindNodes')
-        self.sent_found_nodes: Event[MessageAPI[FoundNodes]] = Event('sent-FoundNodes')
+        self.sent_ping: EventAPI[MessageAPI[Ping]] = Event('sent-Ping')
+        self.sent_pong: EventAPI[MessageAPI[Pong]] = Event('sent-Pong')
 
-        self.sent_advertise: Event[MessageAPI[Advertise]] = Event('sent-Advertise')
-        self.sent_ack: Event[MessageAPI[Ack]] = Event('sent-Ack')
+        self.sent_find_nodes: EventAPI[MessageAPI[FindNodes]] = Event('sent-FindNodes')
+        self.sent_found_nodes: EventAPI[MessageAPI[FoundNodes]] = Event('sent-FoundNodes')
 
-        self.sent_locate: Event[MessageAPI[Locate]] = Event('sent-Locate')
-        self.sent_locations: Event[MessageAPI[Locations]] = Event('sent-Locations')
+        self.sent_advertise: EventAPI[MessageAPI[Advertise]] = Event('sent-Advertise')
+        self.sent_ack: EventAPI[MessageAPI[Ack]] = Event('sent-Ack')
 
-        self.sent_retrieve: Event[MessageAPI[Retrieve]] = Event('sent-Retrieve')
-        self.sent_chunk: Event[MessageAPI[Chunk]] = Event('sent-Chunk')
+        self.sent_locate: EventAPI[MessageAPI[Locate]] = Event('sent-Locate')
+        self.sent_locations: EventAPI[MessageAPI[Locations]] = Event('sent-Locations')
+
+        self.sent_retrieve: EventAPI[MessageAPI[Retrieve]] = Event('sent-Retrieve')
+        self.sent_chunk: EventAPI[MessageAPI[Chunk]] = Event('sent-Chunk')

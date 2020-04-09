@@ -378,6 +378,7 @@ class Client(Service, ClientAPI):
             self.listen_on,
             self._inbound_datagram_send_channel,
             self._outbound_datagram_receive_channel,
+            events=self.events,
         )
         async with background_trio_service(listener):
             await listener.wait_listening()

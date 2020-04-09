@@ -130,6 +130,9 @@ class Metrics(Service):
         self.manager.run_daemon_task(self._report_event, self.client.events.handshake_complete, 'events/handshake-complete')  # noqa: E501
         self.manager.run_daemon_task(self._report_event, self.client.events.handshake_timeout, 'events/handshake-timeout')  # noqa: E501
 
+        self.manager.run_daemon_task(self._report_event, self.client.events.datagram_received, 'datagram/inbound')  # noqa: E501
+        self.manager.run_daemon_task(self._report_event, self.client.events.datagram_sent, 'datagram/outbound')  # noqa: E501
+
         self.manager.run_daemon_task(self._report_event, self.client.events.sent_ping, 'messages/outbound/Ping')  # noqa: E501
         self.manager.run_daemon_task(self._report_event, self.client.events.sent_pong, 'messages/outbound/Pong')  # noqa: E501
         self.manager.run_daemon_task(self._report_event, self.client.events.sent_find_nodes, 'messages/outbound/FindNodes')  # noqa: E501
@@ -155,6 +158,10 @@ class Metrics(Service):
             async for _ in subscription:
                 counter.inc()
                 meter.mark()
+                if event.name == 'session-idle':
+                    self.logger.info('IT HAPPENED: %s:%s', 'session-idle', _)
+                if event.name == 'handshake-timeout':
+                    self.logger.info('IT HAPPENED: %s:%s', 'handshake-timeout', _)
 
     async def _report_routing_table_stats(self, frequency: int) -> None:
         size_gauge = self._registry.gauge('alexandria.dht/routing-table/total-nodes.gauge')
