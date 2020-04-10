@@ -5,7 +5,6 @@ import itertools
 import logging
 from typing import (
     Any,
-    Collection,
     Deque,
     Dict,
     FrozenSet,
@@ -34,14 +33,6 @@ from alexandria.abc import (
 from alexandria.config import StorageConfig
 from alexandria.typing import NodeID
 from alexandria.routing_table import compute_distance
-
-
-def iter_furthest_keys(center_id: NodeID, keys: Collection[bytes]) -> Iterator[bytes]:
-    def sort_fn(key: bytes) -> int:
-        content_id = content_key_to_node_id(key)
-        return compute_distance(center_id, content_id)
-
-    yield from sorted(keys, key=sort_fn, reverse=True)
 
 
 class BaseContentDB(ContentDatabaseAPI):
@@ -126,13 +117,6 @@ class EphemeralDB(BaseContentDB):
             assert False
 
 
-def iter_furthest_content_ids(center_id: NodeID,
-                              content_ids: Collection[NodeID]) -> Iterator[NodeID]:
-    sort_fn = functools.partial(compute_distance, center_id)
-
-    yield from sorted(content_ids, key=sort_fn, reverse=True)
-
-
 @functools.total_ordering
 class SortableNodeID:
     node_id: NodeID
@@ -180,24 +164,33 @@ class EphemeralIndex(ContentIndexAPI):
 
     def add(self, location: Location) -> None:
         content_id, location_id = location
+        content_distance = compute_distance(self.center_id, content_id)
+
         index: List[SortableNodeID]
         try:
             index = self._indices[content_id]
         except KeyError:
             index = []
             self._indices[content_id] = index
-
-        content_distance = compute_distance(self.center_id, content_id)
-        bisect.insort_right(
-            self._indices_by_distance,
-            SortableNodeID(content_id, content_distance),
-        )
+            bisect.insort_right(
+                self._indices_by_distance,
+                SortableNodeID(content_id, content_distance),
+            )
 
         location_distance = compute_distance(self.center_id, location_id)
-        bisect.insort_right(
-            index,
-            SortableNodeID(location_id, location_distance),
-        )
+
+        index_value = SortableNodeID(location_id, location_distance)
+        index_location = bisect.bisect_left(index, index_value)
+
+        # Check if the value is already in the index, if so, we can return
+        # early.
+        try:
+            if index[index_location] == index_value:
+                return
+        except IndexError:
+            pass
+
+        bisect.insort_right(index, index_value)
 
         self.capacity -= 1
         self._enforce_capacity()
