@@ -11,14 +11,18 @@ from alexandria.constants import (
 
 class StorageConfig(NamedTuple):
     # number of bytes
-    ephemeral_storage_size: int = 100 * MEGABYTE
+    #ephemeral_storage_size: int = 100 * MEGABYTE
+    ephemeral_storage_size: int = 100000
     # number of index entries (fixed size per entry)
-    ephemeral_index_size: int = 100000
+    #ephemeral_index_size: int = 100000
+    ephemeral_index_size: int = 100
 
     # number of bytes
-    cache_storage_size: int = 100 * MEGABYTE
+    #cache_storage_size: int = 100 * MEGABYTE
+    cache_storage_size: int = 100000
     # number of index entries (fixed size per entry)
-    cache_index_size: int = 100000
+    #cache_index_size: int = 100000
+    cache_index_size: int = 100
 
 
 class KademliaConfig(NamedTuple):

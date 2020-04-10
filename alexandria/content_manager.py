@@ -1,19 +1,19 @@
+import bisect
 import collections
 import functools
 import itertools
 import logging
-import random
-import threading
 from typing import (
+    Any,
     Collection,
     Deque,
     Dict,
     FrozenSet,
     Iterator,
     KeysView,
+    List,
     Mapping,
     Optional,
-    Set,
     Tuple,
 )
 
@@ -33,23 +33,7 @@ from alexandria.abc import (
 )
 from alexandria.config import StorageConfig
 from alexandria.typing import NodeID
-from alexandria.routing_table import compute_log_distance, compute_distance
-
-
-def get_eviction_probability(content_id: NodeID, center_id: NodeID) -> float:
-    """
-    log-distance:
-     - 0: 0%
-     - 1: 50%
-     - 2: 75%
-     - ...
-     - 256: 99%
-    """
-    if content_id == center_id:
-        return 0.0
-    distance: int
-    distance = compute_log_distance(content_id, center_id)
-    return float(1 - (1 / 2**distance))
+from alexandria.routing_table import compute_distance
 
 
 def iter_furthest_keys(center_id: NodeID, keys: Collection[bytes]) -> Iterator[bytes]:
@@ -66,15 +50,36 @@ class BaseContentDB(ContentDatabaseAPI):
         return self.capacity > 0
 
 
+@functools.total_ordering
+class SortableKey:
+    key: bytes
+    distance: int
+
+    def __init__(self, key: bytes, distance: int) -> None:
+        self.key = key
+        self.distance = distance
+
+    def __eq__(self, other: Any):
+        if type(other) is not type(self):
+            raise TypeError("Invalid comparison")
+        return self.key == other.key
+
+    def __lt__(self, other: Any):
+        if type(other) is not type(self):
+            raise TypeError("Invalid comparison")
+        return self.distance < other.distance
+
+
 class EphemeralDB(BaseContentDB):
     _db: Dict[bytes, bytes]
+    _keys: List[SortableKey]
 
     def __init__(self, center_id: NodeID, capacity: int) -> None:
         self._db = {}
+        self._keys_by_distance = []
         self.center_id = center_id
         self.capacity = capacity
         self.total_capacity = capacity
-        self.eviction_lock = threading.Lock()
 
     def __len__(self) -> int:
         return len(self._db)
@@ -83,19 +88,8 @@ class EphemeralDB(BaseContentDB):
         return collections.KeysView(self._db)
 
     def _enforce_capacity(self) -> None:
-        if self.capacity >= 0:
-            return
-
-        with self.eviction_lock:
-            for key in iter_furthest_keys(self.center_id, self._db.keys()):
-                content_id = content_key_to_node_id(key)
-                evict_probability = get_eviction_probability(self.center_id, content_id)
-                should_evict = random.random() < evict_probability
-                if should_evict:
-                    self.delete(key)
-
-                if self.capacity >= 0:
-                    break
+        while self.capacity < 0:
+            self.delete(self._keys_by_distance[-1].key)
 
     def has(self, key: bytes) -> bool:
         return key in self._db
@@ -114,12 +108,22 @@ class EphemeralDB(BaseContentDB):
             pass
 
         self._db[key] = data
+        content_id = content_key_to_node_id(key)
+        distance = compute_distance(self.center_id, content_id)
+        bisect.insort_right(self._keys_by_distance, SortableKey(key, distance))
         self.capacity -= len(data)
         self._enforce_capacity()
 
     def delete(self, key: bytes) -> None:
         data = self._db.pop(key)
         self.capacity += len(data)
+        content_id = content_key_to_node_id(key)
+        distance = compute_distance(self.center_id, content_id)
+        key_index = bisect.bisect_left(self._keys_by_distance, SortableKey(key, distance))
+        if self._keys_by_distance[key_index].key == key:
+            self._keys_by_distance.pop(key_index)
+        else:
+            assert False
 
 
 def iter_furthest_content_ids(center_id: NodeID,
@@ -129,66 +133,98 @@ def iter_furthest_content_ids(center_id: NodeID,
     yield from sorted(content_ids, key=sort_fn, reverse=True)
 
 
+@functools.total_ordering
+class SortableNodeID:
+    node_id: NodeID
+    distance: int
+
+    def __init__(self, node_id: NodeID, distance: int) -> None:
+        self.node_id = node_id
+        self.distance = distance
+
+    def __eq__(self, other: Any):
+        if type(other) is not type(self):
+            raise TypeError("Invalid comparison")
+        return self.node_id == other.node_id
+
+    def __lt__(self, other: Any):
+        if type(other) is not type(self):
+            raise TypeError("Invalid comparison")
+        return self.distance < other.distance
+
+
 class EphemeralIndex(ContentIndexAPI):
-    _indices: Dict[NodeID, Set[NodeID]]
+    _indices: Dict[NodeID, List[SortableNodeID]]
+    _indices_by_distance = List[SortableNodeID]
 
     def __init__(self, center_id: NodeID, capacity: int) -> None:
         self._indices = {}
+        self._indices_by_distance = []
         self.center_id = center_id
         self.capacity = capacity
         self.total_capacity = capacity
-        self.eviction_lock = threading.Lock()
 
     def __len__(self) -> int:
         return sum(len(index) for index in self._indices.values())
 
     def _enforce_capacity(self) -> None:
-        if self.capacity >= 0:
-            return
+        while self.capacity < 0:
+            furthest_content_id = self._indices_by_distance[-1].node_id
+            furthest_index = self._indices[furthest_content_id]
+            furthest_location_id = furthest_index[-1].node_id
+            self.remove(Location(furthest_content_id, furthest_location_id))
 
-        with self.eviction_lock:
-            for content_id in iter_furthest_content_ids(self.center_id, self._indices.keys()):
-                evict_probability = get_eviction_probability(self.center_id, content_id)
-                should_evict = random.random() < evict_probability
-                if should_evict:
-                    index = self._indices[content_id]
-                    for location_id in iter_furthest_content_ids(content_id, index):
-                        index.remove(location_id)
-                        self.capacity += 1
-
-                        if len(index) == 0:
-                            self._indices.pop(content_id)
-
-                        if self.capacity >= 0:
-                            break
-                if self.capacity >= 0:
-                    break
-
-    def get_index(self, key: NodeID) -> FrozenSet[NodeID]:
-        return frozenset(self._indices[key])
+    def get_index(self, key: NodeID) -> Tuple[NodeID, ...]:
+        index = self._indices[key]
+        return tuple(item.node_id for item in index)
 
     def add(self, location: Location) -> None:
-        key, location_id = location
+        content_id, location_id = location
+        index: List[SortableNodeID]
         try:
-            already_indexed = (location_id in self._indices[key])
+            index = self._indices[content_id]
         except KeyError:
-            self._indices[key] = set()
-            already_indexed = False
+            index = []
+            self._indices[content_id] = index
 
-        if already_indexed:
-            # already indexed so no change
-            return
-        else:
-            self._indices[key].add(location_id)
-            self.capacity -= 1
-            self._enforce_capacity()
+        content_distance = compute_distance(self.center_id, content_id)
+        bisect.insort_right(
+            self._indices_by_distance,
+            SortableNodeID(content_id, content_distance),
+        )
+
+        location_distance = compute_distance(self.center_id, location_id)
+        bisect.insort_right(
+            index,
+            SortableNodeID(location_id, location_distance),
+        )
+
+        self.capacity -= 1
+        self._enforce_capacity()
 
     def remove(self, location: Location) -> None:
-        key, location_id = location
-        index = self._indices[key]
-        if location_id in index:
-            index.remove(location_id)
-            self.capacity += 1
+        content_id, location_id = location
+        index = self._indices[content_id]
+
+        location_distance = compute_distance(self.center_id, location_id)
+        location_index = bisect.bisect_left(index, SortableNodeID(location_id, location_distance))
+        if index[location_index].node_id != location_id:
+            return
+
+        index.pop(location_index)
+        self.capacity += 1
+
+        if len(index) == 0:
+            content_distance = compute_distance(self.center_id, content_id)
+            index_index = bisect.bisect_left(
+                self._indices_by_distance,
+                SortableNodeID(content_id, content_distance),
+            )
+
+            if self._indices_by_distance[index_index].node_id != content_id:
+                raise Exception("Invariant!")
+            self._indices_by_distance.pop(index_index)
+            self._indices.pop(content_id)
 
 
 class CacheDB(BaseContentDB):
