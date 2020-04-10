@@ -376,7 +376,13 @@ class SessionRecipient(BaseSession):
                 self._status = SessionStatus.AFTER
                 await self._events.handshake_complete.trigger(self)
             else:
-                self._inbound_packet_buffer_channels[0].send_nowait(packet)
+                try:
+                    self._inbound_packet_buffer_channels[0].send_nowait(packet)
+                except trio.WouldBlock:
+                    self.logger.error(
+                        "Discarding message during handshake.  Buffer full: %s",
+                        packet,
+                    )
         else:
             raise Exception("Invalid state")
 

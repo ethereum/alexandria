@@ -409,6 +409,5 @@ class RPCServer(Service):
         else:
             self.kademlia.content_manager.durable_db.set(key, data)
             self.kademlia.content_manager.rebuild_durable_index()
-            self.kademlia.announce_tracker.enqueue(bundle.key)
-            await self.network.announce(key, self.client.local_node)
+        self.kademlia.advertise_tracker.enqueue(key, last_advertised_at=0.0)
         return generate_response(request, (), None)
