@@ -25,6 +25,14 @@ class DiskStats(NamedTuple):
     write_bytes: int
 
 
+class MemoryStats(NamedTuple):
+
+    # Number of network packets sent
+    free: int
+    # Number of network packets received
+    used: int
+
+
 class NetworkStats(NamedTuple):
 
     # Number of network packets sent
@@ -36,6 +44,7 @@ class NetworkStats(NamedTuple):
 class SystemStats(NamedTuple):
     cpu_stats: CpuStats
     disk_stats: DiskStats
+    memory_stats: MemoryStats
     network_stats: NetworkStats
 
 
@@ -57,9 +66,26 @@ def read_disk_stats() -> DiskStats:
     )
 
 
+def read_memory_stats() -> MemoryStats:
+    stats = psutil.virtual_memory()
+    return MemoryStats(
+        free=stats.free,
+        used=stats.used,
+    )
+
+
 def read_network_stats() -> NetworkStats:
     stats = psutil.net_io_counters()
     return NetworkStats(
         in_packets=stats.packets_recv,
         out_packets=stats.packets_sent
+    )
+
+
+def read_system_stats() -> SystemStats:
+    return SystemStats(
+        cpu_stats=read_cpu_stats(),
+        disk_stats=read_disk_stats(),
+        memory_stats=read_memory_stats(),
+        network_stats=read_network_stats(),
     )

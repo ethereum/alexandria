@@ -18,12 +18,7 @@ from alexandria.payloads import (
     Ping, Pong,
     FindNodes, FoundNodes,
 )
-from alexandria.system_metrics import (
-    read_cpu_stats,
-    read_disk_stats,
-    read_network_stats,
-    SystemStats,
-)
+from alexandria.system_metrics import read_system_stats
 
 
 PAYLOAD_TYPES = (
@@ -223,28 +218,26 @@ class Metrics(Service):
         cpu_sysload_gauge = self._registry.gauge('alexandria.system/cpu/sysload.gauge')
         cpu_syswait_gauge = self._registry.gauge('alexandria.system/cpu/syswait.gauge')
 
+        memory_used_gauge = self._registry.gauge('alexandria.system/memory/used.gauge')
+        memory_free_gauge = self._registry.gauge('alexandria.system/memory/free.gauge')
+
         disk_readdata_meter = self._registry.meter('alexandria.system/disk/readdata.meter')
         disk_writedata_meter = self._registry.meter('alexandria.system/disk/writedata.meter')
 
         network_in_packets_meter = self._registry.meter('alexandria.network/in/packets/total.meter')
         network_out_packets_meter = self._registry.meter('alexandria.network/out/packets/total.meter')  # noqa: E501
 
-        previous = SystemStats(
-            cpu_stats=read_cpu_stats(),
-            disk_stats=read_disk_stats(),
-            network_stats=read_network_stats(),
-        )
+        previous = read_system_stats()
         async for _ in every(frequency, initial_delay=frequency):
-            current = SystemStats(
-                cpu_stats=read_cpu_stats(),
-                disk_stats=read_disk_stats(),
-                network_stats=read_network_stats(),
-            )
+            current = read_system_stats()
 
             global_time = current.cpu_stats.global_time - previous.cpu_stats.global_time
             cpu_sysload_gauge.set_value(global_time / frequency)
             global_wait = current.cpu_stats.global_wait_io - previous.cpu_stats.global_wait_io
             cpu_syswait_gauge.set_value(global_wait / frequency)
+
+            memory_used_gauge.set_value(current.memory_stats.used)
+            memory_free_gauge.set_value(current.memory_stats.free)
 
             read_bytes = current.disk_stats.read_bytes - previous.disk_stats.read_bytes
             disk_readdata_meter.mark(read_bytes)
