@@ -3,6 +3,7 @@ import collections
 import functools
 import itertools
 import logging
+import time
 from typing import (
     Any,
     Deque,
@@ -13,11 +14,13 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Set,
     Tuple,
 )
 
 from eth_utils import encode_hex, to_tuple
 from eth_utils.toolz import groupby
+import trio
 
 from alexandria._utils import content_key_to_node_id
 from alexandria.abc import (
@@ -50,20 +53,20 @@ class SortableKey:
         self.key = key
         self.distance = distance
 
-    def __eq__(self, other: Any):
-        if type(other) is not type(self):
-            raise TypeError("Invalid comparison")
-        return self.key == other.key
+    def __eq__(self, other: Any) -> bool:
+        if type(other) is type(self):
+            return self.key == other.key  # type: ignore
+        raise TypeError("Invalid comparison")
 
-    def __lt__(self, other: Any):
-        if type(other) is not type(self):
-            raise TypeError("Invalid comparison")
-        return self.distance < other.distance
+    def __lt__(self, other: Any) -> bool:
+        if type(other) is type(self):
+            return self.distance < other.distance  # type: ignore
+        raise TypeError("Invalid comparison")
 
 
 class EphemeralDB(BaseContentDB):
     _db: Dict[bytes, bytes]
-    _keys: List[SortableKey]
+    _keys_by_distance: List[SortableKey]
 
     def __init__(self, center_id: NodeID, capacity: int) -> None:
         self._db = {}
@@ -126,20 +129,20 @@ class SortableNodeID:
         self.node_id = node_id
         self.distance = distance
 
-    def __eq__(self, other: Any):
-        if type(other) is not type(self):
-            raise TypeError("Invalid comparison")
-        return self.node_id == other.node_id
+    def __eq__(self, other: Any) -> bool:
+        if type(other) is type(self):
+            return self.node_id == other.node_id  # type: ignore
+        raise TypeError("Invalid comparison")
 
-    def __lt__(self, other: Any):
-        if type(other) is not type(self):
-            raise TypeError("Invalid comparison")
-        return self.distance < other.distance
+    def __lt__(self, other: Any) -> bool:
+        if type(other) is type(self):
+            return self.distance < other.distance  # type: ignore
+        raise TypeError("Invalid comparison")
 
 
 class EphemeralIndex(ContentIndexAPI):
     _indices: Dict[NodeID, List[SortableNodeID]]
-    _indices_by_distance = List[SortableNodeID]
+    _indices_by_distance: List[SortableNodeID]
 
     def __init__(self, center_id: NodeID, capacity: int) -> None:
         self._indices = {}
@@ -221,7 +224,7 @@ class EphemeralIndex(ContentIndexAPI):
 
 
 class CacheDB(BaseContentDB):
-    _records: 'collections.OrderedDict[Content]'
+    _records: 'collections.OrderedDict[bytes, bytes]'
 
     def __init__(self, capacity: int) -> None:
         self.capacity = capacity
@@ -311,11 +314,11 @@ class CacheIndex(ContentIndexAPI):
         self._records.appendleft(location)
         self._counter += 1
 
-    def get_index(self, content_id: NodeID) -> FrozenSet[NodeID]:
+    def get_index(self, content_id: NodeID) -> Tuple[NodeID, ...]:
         index = self.cache_indices[content_id]
         for location in self._get_records(content_id):
             self._touch_record(location)
-        return index
+        return tuple(index)
 
     def add(self, location: Location) -> None:
         if location in self._records:
@@ -333,6 +336,67 @@ class CacheIndex(ContentIndexAPI):
             self.capacity += 1
         else:
             raise KeyError(location)
+
+
+@functools.total_ordering
+class AdvertiseQueueItem:
+    def __init__(self,
+                 key: bytes,
+                 last_advertised_at: float) -> None:
+        self.key = key
+        self.last_advertised_at = last_advertised_at
+
+    def __eq__(self, other: Any) -> bool:
+        if type(self) is type(other):
+            return self.key == other.key  # type: ignore
+        raise TypeError("Type mismatch")
+
+    def __lt__(self, other: Any) -> bool:
+        if type(self) is type(other):
+            return self.last_advertised_at < other.last_advertised_at  # type: ignore
+        raise TypeError("Type mismatch")
+
+
+class AdvertiseTracker:
+    _queue: Deque[AdvertiseQueueItem]
+    _keys: Set[bytes]
+
+    def __init__(self, seconds_between_advertisements: int) -> None:
+        self._queue = collections.deque()
+        self._keys = set()
+        self._has_content = trio.Event()
+        self._seconds_between_advertisements = seconds_between_advertisements
+
+    def enqueue(self, key: bytes, last_advertised_at: float = None) -> None:
+        if key in self._keys:
+            return
+
+        if last_advertised_at is None:
+            last_advertised_at = time.monotonic()
+
+        bisect.insort_right(self._queue, AdvertiseQueueItem(key, last_advertised_at))
+        self._keys.add(key)
+        self._has_content.set()
+
+    def get_time_till_next_advertise(self) -> float:
+        delta = time.monotonic() - self._queue[0].last_advertised_at
+        return max(0.0, self._seconds_between_advertisements - delta)
+
+    async def pop_next(self) -> bytes:
+        await self._has_content.wait()
+
+        delay = self.get_time_till_next_advertise()
+        if delay > 0:
+            await trio.sleep(delay)
+
+        to_advertise = self._queue.popleft()
+        self._keys.remove(to_advertise.key)
+
+        if len(self._queue) == 0:
+            self._has_content.set()
+            self._has_content = trio.Event()
+
+        return to_advertise.key
 
 
 class ContentManager(ContentManagerAPI):
@@ -382,11 +446,12 @@ class ContentManager(ContentManagerAPI):
 
     def rebuild_durable_index(self) -> None:
         self.durable_index = {
-            content_key_to_node_id(key): frozenset({self.center_id})
+            content_key_to_node_id(key): (self.center_id,)
             for key in self.durable_db.keys()
         }
 
     def iter_content_keys(self) -> Tuple[bytes, ...]:
+        # TODO: Defunkt, only used in tests now.
         return tuple(itertools.chain(
             self.durable_db.keys(),
             self.ephemeral_db.keys(),
@@ -446,26 +511,26 @@ class ContentManager(ContentManagerAPI):
         else:
             raise Exception("Unreachable code block")
 
-    def get_index(self, content_id: NodeID) -> FrozenSet[NodeID]:
-        index_from_durable: FrozenSet[NodeID]
+    def get_index(self, content_id: NodeID) -> Tuple[NodeID, ...]:
+        index_from_durable: Tuple[NodeID, ...]
         try:
             index_from_durable = self.durable_index[content_id]
         except KeyError:
-            index_from_durable = frozenset()
+            index_from_durable = tuple()
 
-        index_from_ephemeral: FrozenSet[NodeID]
+        index_from_ephemeral: Tuple[NodeID, ...]
         try:
             index_from_ephemeral = self.ephemeral_index.get_index(content_id)
         except KeyError:
-            index_from_ephemeral = frozenset()
+            index_from_ephemeral = tuple()
 
-        index_from_cache: FrozenSet[NodeID]
+        index_from_cache: Tuple[NodeID, ...]
         try:
             index_from_cache = self.cache_index.get_index(content_id)
         except KeyError:
-            index_from_cache = frozenset()
+            index_from_cache = tuple()
 
-        return index_from_durable | index_from_ephemeral | index_from_cache
+        return index_from_durable + index_from_ephemeral + index_from_cache
 
     def ingest_content(self, content: ContentBundle) -> None:
         if content.data is not None:

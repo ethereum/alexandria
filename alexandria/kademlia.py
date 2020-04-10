@@ -20,8 +20,13 @@ from alexandria.abc import (
     RoutingTableAPI,
 )
 from alexandria.config import KademliaConfig
-from alexandria.constants import PING_TIMEOUT, ANNOUNCE_TIMEOUT
-from alexandria.content_manager import ContentManager
+from alexandria.constants import (
+    PING_TIMEOUT,
+    ANNOUNCE_TIMEOUT,
+    KADEMLIA_ANNOUNCE_INTERVAL,
+    KADEMLIA_ANNOUNCE_CONCURRENCY,
+)
+from alexandria.content_manager import AdvertiseTracker, ContentManager
 from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
 from alexandria.routing_table import compute_distance
 from alexandria.typing import NodeID
@@ -63,6 +68,7 @@ class Kademlia(Service, KademliaAPI):
             durable_db=durable_db,
             config=config.storage_config,
         )
+        self.advertise_tracker = AdvertiseTracker(KADEMLIA_ANNOUNCE_INTERVAL)
 
         (
             self._inbound_content_send_channel,
@@ -83,7 +89,7 @@ class Kademlia(Service, KademliaAPI):
             self._handle_content_ingestion,
             self._inbound_content_receive_channel,
         )
-        self.manager.run_daemon_task(self._periodically_announce_content)
+        self.manager.run_daemon_task(self._periodically_advertise_content)
 
         self.manager.run_daemon_task(self._ping_occasionally)
         self.manager.run_daemon_task(self._lookup_occasionally)
@@ -218,11 +224,45 @@ class Kademlia(Service, KademliaAPI):
                 )
                 await self.client.send_pong(request.node, request_id=request.payload.request_id)
 
-    async def _periodically_announce_content(self) -> None:
-        async for _ in every(self.config.ANNOUNCE_INTERVAL, initial_delay=10):  # noqa: F841
+    async def _periodically_advertise_content(self) -> None:
+        def enqueue_all_content_keys() -> None:
+            self.logger.debug("Starting load of all content database into advertisement queue")
             for key in self.content_manager.iter_content_keys():
-                with trio.move_on_after(ANNOUNCE_TIMEOUT):
-                    await self.network.announce(key, self.client.local_node)
+                self.advertise_tracker.enqueue(key, 0.0)
+            self.logger.debug("Finished load of all content database into advertisement queue")
+
+        await trio.to_thread.run_sync(enqueue_all_content_keys)
+
+        semaphor = trio.Semaphore(
+            KADEMLIA_ANNOUNCE_CONCURRENCY,
+            max_value=KADEMLIA_ANNOUNCE_CONCURRENCY,
+        )
+
+        async def do_announce(key):
+            with trio.move_on_after(ANNOUNCE_TIMEOUT):
+                await self.network.announce(
+                    key,
+                    Node(self.client.local_node_id, self.client.external_endpoint),
+                )
+            self.advertise_tracker.enqueue(key)
+            semaphor.release()
+
+        async with trio.open_nursery() as nursery:
+            while self.manager.is_running:
+                key = await self.advertise_tracker.pop_next()
+                try:
+                    self.content_manager.get_content(key)
+                except KeyError:
+                    self.logger.debug(
+                        'Discarding announcement key missing content: %s',
+                        encode_hex(key),
+                    )
+                    continue
+
+                self.logger.debug('Announcing: %s', encode_hex(key))
+
+                await semaphor.acquire()
+                nursery.start_soon(do_announce, key)
 
     async def _handle_content_ingestion(self,
                                         receive_channel: trio.abc.ReceiveChannel[Tuple[Node, bytes]],  # noqa: E501
@@ -254,8 +294,9 @@ class Kademlia(Service, KademliaAPI):
                     data=data,
                     node_id=node.node_id,
                 )
-                # TODO: maybe CPU intensive?
                 self.content_manager.ingest_content(bundle)
+                if bundle.data:
+                    self.advertise_tracker.enqueue(key, last_advertised_at=0.0)
 
     def _check_interest_in_ephemeral_content(self, key: bytes) -> bool:
         if self.content_manager.durable_db.has(key):

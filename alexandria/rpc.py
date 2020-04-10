@@ -212,7 +212,13 @@ class RPCServer(Service):
                     request, offset = decoder.raw_decode(raw_request)
                 except json.JSONDecodeError:
                     # invalid json request, keep reading data until a valid json is formed
-                    self.logger.debug("Invalid JSON, waiting for rest of message: %r", raw_request)
+                    if raw_request:
+                        self.logger.debug(
+                            "Invalid JSON, waiting for rest of message: %r",
+                            raw_request,
+                        )
+                    else:
+                        await trio.sleep(0.01)
                     continue
 
                 if not isinstance(request, collections.Mapping):
@@ -400,10 +406,9 @@ class RPCServer(Service):
         if is_ephemeral:
             bundle = ContentBundle(key, data, self.client.local_node_id)
             self.kademlia.content_manager.ingest_content(bundle)
-            # TODO: should announce...
         else:
             self.kademlia.content_manager.durable_db.set(key, data)
             self.kademlia.content_manager.rebuild_durable_index()
-            # TODO: should announce...
-        await self.network.announce(key, self.client.local_node)
+            self.kademlia.announce_tracker.enqueue(bundle.key)
+            await self.network.announce(key, self.client.local_node)
         return generate_response(request, (), None)

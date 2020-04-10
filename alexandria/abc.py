@@ -4,7 +4,6 @@ from typing import (
     AsyncContextManager,
     Collection,
     Deque,
-    FrozenSet,
     Generic,
     Iterator,
     KeysView,
@@ -614,7 +613,7 @@ class ContentIndexAPI(Sized):
     capacity: int
 
     @abstractmethod
-    def get_index(self, key: NodeID) -> FrozenSet[NodeID]:
+    def get_index(self, key: NodeID) -> Tuple[NodeID, ...]:
         ...
 
     @abstractmethod
@@ -644,7 +643,7 @@ class ContentManagerAPI(ABC):
     center_id: NodeID
 
     durable_db: DurableDatabaseAPI
-    durable_index: Mapping[NodeID, FrozenSet[NodeID]]
+    durable_index: Mapping[NodeID, Tuple[NodeID, ...]]
 
     ephemeral_db: ContentDatabaseAPI
     ephemeral_index: ContentIndexAPI
@@ -669,7 +668,7 @@ class ContentManagerAPI(ABC):
         ...
 
     @abstractmethod
-    def get_index(self, content_id: NodeID) -> FrozenSet[NodeID]:
+    def get_index(self, content_id: NodeID) -> Tuple[NodeID, ...]:
         ...
 
     @abstractmethod
