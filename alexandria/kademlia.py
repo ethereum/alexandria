@@ -254,10 +254,8 @@ class Kademlia(Service, KademliaAPI):
                     data=data,
                     node_id=node.node_id,
                 )
-                await trio.to_thread.run_sync(
-                    self.content_manager.ingest_content,
-                    bundle,
-                )
+                # TODO: maybe CPU intensive?
+                self.content_manager.ingest_content(bundle)
 
     def _check_interest_in_ephemeral_content(self, key: bytes) -> bool:
         if self.content_manager.durable_db.has(key):

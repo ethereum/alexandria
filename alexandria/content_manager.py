@@ -192,88 +192,46 @@ class EphemeralIndex(ContentIndexAPI):
 
 
 class CacheDB(BaseContentDB):
-    _records: Deque[Content]
-    _cache_db: Mapping[bytes, bytes]
-    _counter: int
+    _records: 'collections.OrderedDict[Content]'
 
     def __init__(self, capacity: int) -> None:
         self.capacity = capacity
         self.total_capacity = capacity
-        self._records = collections.deque()
-        self._counter = 0
-        self._last_cached_at = -1
-        self._cache_db = {}
+        self._records = collections.OrderedDict()
 
     def __len__(self) -> int:
         return len(self._records)
 
     def keys(self) -> KeysView[bytes]:
-        return collections.KeysView(self.cache_db)
-
-    @property
-    def cache_db(self) -> Mapping[bytes, bytes]:
-        if self._last_cached_at < self._counter:
-            self._cache_db = {
-                content.key: content.data
-                for content in self._records
-            }
-            self._last_cached_at = self._counter
-        return self._cache_db
+        return self._records.keys()
 
     def _enforce_capacity(self) -> None:
         while self.capacity < 0:
-            oldest_content = self._records.pop()
-            self._counter += 1
-            self.capacity += len(oldest_content.data)
-
-    def _touch_record(self, content: Content) -> None:
-        if content == self._records[0]:
-            return
-        self._records.remove(content)
-        self._records.appendleft(content)
-        self._counter += 1
-
-    def _get_record(self, key: bytes) -> Content:
-        for content in self._records:
-            if content.key == key:
-                return content
-        else:
-            raise KeyError(key)
+            oldest_data = self._records.popitem(last=False)
+            self.capacity += len(oldest_data)
 
     def has(self, key: bytes) -> bool:
-        return key in self.cache_db
+        return key in self._records
 
     def get(self, key: bytes) -> bytes:
-        content = self._get_record(key)
-        self._touch_record(content)
-        return content.data
+        self._records.move_to_end(key, last=False)
+        return self._records[key]
 
     def set(self, content: Content) -> None:
-        # re-setting the same value
-        if content in self._records:
-            self._touch_record(content)
-            return
-
-        # if db already has key, clear out existing value
         try:
-            previous_content = self._get_record(content.key)
+            current_data = self._records.pop(content.key)
         except KeyError:
             pass
         else:
-            self.capacity += len(previous_content.data)
-            self._records.remove(previous_content)
+            self.capacity += len(current_data)
 
-        # set new record
-        self._records.appendleft(content)
-        self._counter += 1
+        self._records[content.key] = content.data
         self.capacity -= len(content.data)
         self._enforce_capacity()
 
     def delete(self, key: bytes) -> None:
-        content = self._get_record(key)
-        self._records.remove(content)
-        self._counter += 1
-        self.capacity += len(content.data)
+        data = self._records.pop(key)
+        self.capacity += len(data)
 
 
 class CacheIndex(ContentIndexAPI):

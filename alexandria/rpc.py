@@ -246,7 +246,10 @@ class RPCServer(Service):
                     if not result.endswith(NEW_LINE):
                         result += NEW_LINE
 
-                    await socket.send(result.encode())
+                    try:
+                        await socket.send(result.encode())
+                    except BrokenPipeError:
+                        break
 
     async def _handle_nodeId(self, request: RPCRequest) -> str:
         await trio.hazmat.checkpoint()
