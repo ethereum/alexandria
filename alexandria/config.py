@@ -13,10 +13,10 @@ class StorageConfig(NamedTuple):
     # number of bytes
     ephemeral_storage_size: int = 100 * MEGABYTE
     # number of index entries (fixed size per entry)
-    ephemeral_index_size: int = 100000
+    ephemeral_index_size: int = 1000000
 
     # number of bytes
-    cache_storage_size: int = 100 * MEGABYTE
+    cache_storage_size: int = 10 * MEGABYTE
     # number of index entries (fixed size per entry)
     cache_index_size: int = 100000
 
