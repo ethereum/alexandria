@@ -239,8 +239,8 @@ class CacheDB(BaseContentDB):
 
     def _enforce_capacity(self) -> None:
         while self.capacity < 0:
-            oldest_data = self._records.popitem(last=False)
-            self.capacity += len(oldest_data)
+            data = self._records.popitem(last=False)
+            self.capacity += len(data)
 
     def has(self, key: bytes) -> bool:
         return key in self._records
