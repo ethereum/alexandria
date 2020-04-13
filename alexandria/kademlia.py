@@ -264,39 +264,43 @@ class Kademlia(Service, KademliaAPI):
                 await semaphor.acquire()
                 nursery.start_soon(do_announce, key)
 
+    async def _ingest_content(self, node: Node, key: bytes) -> None:
+        data: Optional[bytes]
+        if self._check_interest_in_ephemeral_content(key):
+            try:
+                with trio.fail_after(5):
+                    data = await self.network.retrieve(node, key=key)
+                    self.logger.debug(
+                        'Successfully retrieved content: %s@%s',
+                        encode_hex(key),
+                        node,
+                    )
+            except trio.TooSlowError:
+                self.logger.debug(
+                    'Content retrieval timed out: %s@%s',
+                    encode_hex(key),
+                    node,
+                )
+                data = None
+        else:
+            self.logger.debug('Not interested in content: %s@%s', encode_hex(key), node)
+            data = None
+        bundle = ContentBundle(
+            key=key,
+            data=data,
+            node_id=node.node_id,
+        )
+        self.content_manager.ingest_content(bundle)
+        if bundle.data:
+            self.advertise_tracker.enqueue(key, last_advertised_at=0.0)
+
     async def _handle_content_ingestion(self,
                                         receive_channel: trio.abc.ReceiveChannel[Tuple[Node, bytes]],  # noqa: E501
                                         ) -> None:
-        async with receive_channel:
-            async for node, key in receive_channel:
-                data: Optional[bytes]
-                if self._check_interest_in_ephemeral_content(key):
-                    try:
-                        with trio.fail_after(5):
-                            data = await self.network.retrieve(node, key=key)
-                            self.logger.debug(
-                                'Successfully retrieved content: %s@%s',
-                                encode_hex(key),
-                                node,
-                            )
-                    except trio.TooSlowError:
-                        self.logger.debug(
-                            'Content retrieval timed out: %s@%s',
-                            encode_hex(key),
-                            node,
-                        )
-                        data = None
-                else:
-                    self.logger.debug('Not interested in content: %s@%s', encode_hex(key), node)
-                    data = None
-                bundle = ContentBundle(
-                    key=key,
-                    data=data,
-                    node_id=node.node_id,
-                )
-                self.content_manager.ingest_content(bundle)
-                if bundle.data:
-                    self.advertise_tracker.enqueue(key, last_advertised_at=0.0)
+        async with trio.open_nursery() as nursery:
+            async with receive_channel:
+                async for node, key in receive_channel:
+                    nursery.start_soon(self._ingest_content, node, key)
 
     def _check_interest_in_ephemeral_content(self, key: bytes) -> bool:
         if self.content_manager.durable_db.has(key):
