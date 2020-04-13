@@ -94,6 +94,7 @@ def find_internal_ip_on_device_network(upnp_dev: upnpclient.upnp.Device) -> str:
 WAN_SERVICE_NAMES = (
     'WANIPConn1',
     'WANIPConnection.1',  # Nighthawk C7800
+    'WANPPPConnection.1',  # CenturyLink C1100Z
 )
 
 
