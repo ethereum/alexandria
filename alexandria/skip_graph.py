@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import logging
 from typing import Dict, Iterable, List, NewType, Optional, Tuple
 
@@ -115,7 +116,21 @@ class SGNode:
             yield level, self.get_right_neighbor(level)
 
 
-class Graph:
+class GraphAPI(ABC):
+    @abstractmethod
+    async def insert(self, key: Key, anchor: SGNode) -> SGNode:
+        ...
+
+    @abstractmethod
+    async def delete(self, key: Key, anchor: SGNode) -> SGNode:
+        ...
+
+    @abstractmethod
+    async def search(self, key: Key, anchor: SGNode) -> SGNode:
+        ...
+
+
+class Graph(GraphAPI):
     logger = logging.getLogger('alexandria.skip_graph.Graph')
 
     nodes: Dict[Key, SGNode]
@@ -123,7 +138,7 @@ class Graph:
     def __init__(self, initial_node: SGNode) -> None:
         self.nodes = {initial_node.key: initial_node}
 
-    def insert(self, key: Key, current: SGNode) -> SGNode:
+    async def insert(self, key: Key, current: SGNode) -> SGNode:
         self.logger.debug("Inserting: %d", key)
         left_neighbor, right_neighbor = self._search_insert_point(key, current, current.max_level)
         self.logger.debug("Insertion point found: %s < %d < %s", left_neighbor, key, right_neighbor)
@@ -234,9 +249,9 @@ class Graph:
         else:
             raise Exception("Invariant")
 
-    def delete(self, key: Key, current: SGNode) -> None:
+    async def delete(self, key: Key, current: SGNode) -> None:
         self.logger.debug('Deleting: %d', key)
-        node = self.search(key, current)
+        node = await self.search(key, current)
 
         left: Optional[SGNode]
         right: Optional[SGNode]
@@ -259,7 +274,7 @@ class Graph:
 
         self.nodes.pop(key)
 
-    def search(self, key: Key, current: SGNode) -> None:
+    async def search(self, key: Key, current: SGNode) -> None:
         self.logger.debug("Searching: %d", key)
         return self._search(key, current, current.max_level)
 

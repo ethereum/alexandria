@@ -1,6 +1,7 @@
 import random
 
 import pytest
+import trio
 
 from alexandria.tools.skip_graph import validate_graph
 from alexandria.skip_graph import SGNode, Graph, AlreadyPresent, NotFound
@@ -31,6 +32,15 @@ def test_node_membership_vector(key, level):
     random_module=st.random_module(),
 )
 def test_skip_graph_insert_fuzz(anchor_key, keys_to_insert, random_module):
+    trio.run(
+        do_test_skip_graph_insert_fuzz,
+        anchor_key,
+        keys_to_insert,
+        random_module,
+    )
+
+
+async def do_test_skip_graph_insert_fuzz(anchor_key, keys_to_insert, random_module):
     anchor = SGNode(anchor_key)
     graph = Graph(anchor)
 
@@ -40,9 +50,9 @@ def test_skip_graph_insert_fuzz(anchor_key, keys_to_insert, random_module):
         anchor_from = graph.nodes[random.choice(tuple(inserted))]
         if key in inserted:
             with pytest.raises(AlreadyPresent):
-                graph.insert(key, anchor_from)
+                await graph.insert(key, anchor_from)
         else:
-            node = graph.insert(key, anchor_from)
+            node = await graph.insert(key, anchor_from)
             assert node.key == key
             inserted.add(key)
         validate_graph(graph)
@@ -63,6 +73,16 @@ def test_skip_graph_insert_fuzz(anchor_key, keys_to_insert, random_module):
     random_module=st.random_module(),
 )
 def test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_search, random_module):
+    trio.run(
+        do_test_skip_graph_search_fuzz,
+        anchor_key,
+        keys_to_insert,
+        keys_to_search,
+        random_module,
+    )
+
+
+async def do_test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_search, random_module):
     anchor = SGNode(anchor_key)
     graph = Graph(anchor)
 
@@ -72,9 +92,9 @@ def test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_search, rand
         anchor_from = graph.nodes[random.choice(tuple(inserted))]
         if key in inserted:
             with pytest.raises(AlreadyPresent):
-                graph.insert(key, anchor_from)
+                await graph.insert(key, anchor_from)
         else:
-            node = graph.insert(key, anchor_from)
+            node = await graph.insert(key, anchor_from)
             assert node.key == key
             inserted.add(key)
 
@@ -83,9 +103,9 @@ def test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_search, rand
     for key in keys_to_search:
         search_anchor = graph.nodes[random.choice(tuple(inserted))]
 
-        if key in keys_to_insert:
-            node = graph.search(key, search_anchor)
+        if key == anchor_key or key in keys_to_insert:
+            node = await graph.search(key, search_anchor)
             assert node.key == key
         else:
             with pytest.raises(NotFound):
-                graph.search(key, search_anchor)
+                await graph.search(key, search_anchor)
