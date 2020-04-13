@@ -14,38 +14,34 @@ logger = logging.getLogger('alexandria.testing')
 async def test_client_inbound_connect(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    got_dial_in = bob.events.session_created.subscribe()
-    got_completed_handshake = bob.events.handshake_complete.subscribe()
+    async with bob.events.session_created.subscribe() as got_dial_in:
+        async with bob.events.handshake_complete.subscribe() as got_completed_handshake:
+            await alice.send_ping(bob.local_node)
 
-    async with got_dial_in, got_completed_handshake:
-        await alice.send_ping(bob.local_node)
+            with trio.fail_after(1):
+                alice_session_from_dial_in = await got_dial_in.receive()
+            assert alice_session_from_dial_in.remote_node_id == alice.local_node_id
 
-        with trio.fail_after(1):
-            alice_session_from_dial_in = await got_dial_in
-        assert alice_session_from_dial_in.remote_node_id == alice.local_node_id
-
-        with trio.fail_after(1):
-            alice_session_from_complete_handhshake = await got_completed_handshake
-        assert alice_session_from_complete_handhshake.remote_node_id == alice.local_node_id
+            with trio.fail_after(1):
+                alice_session_from_complete_handhshake = await got_completed_handshake.receive()
+            assert alice_session_from_complete_handhshake.remote_node_id == alice.local_node_id
 
 
 @pytest.mark.trio
 async def test_client_outbound_connect(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    got_dial_in = alice.events.session_created.subscribe()
-    got_completed_handshake = alice.events.handshake_complete.subscribe()
+    async with alice.events.session_created.subscribe() as got_dial_in:
+        async with alice.events.handshake_complete.subscribe() as got_completed_handshake:
+            await alice.send_ping(bob.local_node)
 
-    async with got_dial_in, got_completed_handshake:
-        await alice.send_ping(bob.local_node)
+            with trio.fail_after(1):
+                bob_session_from_dial_in = await got_dial_in.receive()
+            assert bob_session_from_dial_in.remote_node_id == bob.local_node_id
 
-        with trio.fail_after(1):
-            bob_session_from_dial_in = await got_dial_in
-        assert bob_session_from_dial_in.remote_node_id == bob.local_node_id
-
-        with trio.fail_after(1):
-            bob_session_from_complete_handhshake = await got_completed_handshake
-        assert bob_session_from_complete_handhshake.remote_node_id == bob.local_node_id
+            with trio.fail_after(1):
+                bob_session_from_complete_handhshake = await got_completed_handshake.receive()
+            assert bob_session_from_complete_handhshake.remote_node_id == bob.local_node_id
 
 
 @pytest.mark.trio
@@ -66,14 +62,14 @@ async def test_client_symetric_connect():
         for _ in range(20):
             await trio.hazmat.checkpoint()
 
-        alice_handshake_complete = alice.events.handshake_complete.subscribe()
-        bob_handshake_complete = bob.events.handshake_complete.subscribe()
-        async with background_trio_service(bob):
-            await bob.send_ping(alice.local_node)
+        async with alice.events.handshake_complete.subscribe() as alice_handshake_complete:
+            async with bob.events.handshake_complete.subscribe() as bob_handshake_complete:
+                async with background_trio_service(bob):
+                    await bob.send_ping(alice.local_node)
 
-            with trio.fail_after(1):
-                bob_session = await alice_handshake_complete
-                alice_session = await bob_handshake_complete
+                    with trio.fail_after(1):
+                        bob_session = await alice_handshake_complete.receive()
+                        alice_session = await bob_handshake_complete.receive()
 
-            assert not bob_session.is_initiator
-            assert alice_session.is_initiator
+                    assert not bob_session.is_initiator
+                    assert alice_session.is_initiator

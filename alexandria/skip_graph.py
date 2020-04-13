@@ -130,6 +130,9 @@ class Graph:
         node = SGNode(key=key)
         return self._insert_at_level(node, left_neighbor, right_neighbor, 0)
 
+    def get_node(self, key: Key) -> SGNode:
+        return self.nodes[key]
+
     def _insert_at_level(self,
                          node: SGNode,
                          left: Optional[SGNode],
@@ -140,14 +143,6 @@ class Graph:
         self._link_nodes(node, right, level)
 
         self.logger.debug("Level-%d: (%s < %s < %s)", level, left, node, right)
-
-        if left is None and right is not None:
-            assert right.get_left_neighbor(level) == node.key
-        if right is None and left is not None:
-            assert left.get_right_neighbor(level) == node.key
-        if left is not None and right is not None:
-            assert left.get_right_neighbor(level) == node.key
-            assert right.get_left_neighbor(level) == node.key
 
         # Break if both neighbors are now null
         if left is None and right is None:
@@ -175,7 +170,7 @@ class Graph:
                 left = None
                 break
             else:
-                left = self.nodes[next_left_key]
+                left = self.get_node(next_left_key)
 
         while right is not None and right.get_membership_at_level(level + 1) != node_membership:
             next_right_key = right.get_right_neighbor(level)
@@ -183,15 +178,7 @@ class Graph:
                 right = None
                 break
             else:
-                right = self.nodes[next_right_key]
-
-        if left is None and right is not None:
-            assert right.get_left_neighbor(level + 1) is None
-        if right is None and left is not None:
-            assert left.get_right_neighbor(level + 1) is None
-        if left is not None and right is not None:
-            assert left.get_right_neighbor(level + 1) == right.key
-            assert right.get_left_neighbor(level + 1) == left.key
+                right = self.get_node(next_right_key)
 
         return self._insert_at_level(node, left, right, level + 1)
 
@@ -222,13 +209,13 @@ class Graph:
                     continue
 
                 if key >= right_key:
-                    right_neighbor = self.nodes[right_key]
+                    right_neighbor = self.get_node(right_key)
                     return self._search_insert_point(key, right_neighbor, at_level)
             else:
                 right_neighbor_key = current.get_right_neighbor(0)
                 if right_neighbor_key is None:
                     return current, None
-                right_neighbor = self.nodes[right_neighbor_key]
+                right_neighbor = self.get_node(right_neighbor_key)
                 return current, right_neighbor
         elif key < current.key:
             for at_level, left_key in current.iter_down_left_levels(level):
@@ -236,13 +223,13 @@ class Graph:
                     continue
 
                 if key <= left_key:
-                    left_neighbor = self.nodes[left_key]
+                    left_neighbor = self.get_node(left_key)
                     return self._search_insert_point(key, left_neighbor, at_level)
             else:
                 left_neighbor_key = current.get_left_neighbor(0)
                 if left_neighbor_key is None:
                     return None, current
-                left_neighbor = self.nodes[left_neighbor_key]
+                left_neighbor = self.get_node(left_neighbor_key)
                 return left_neighbor, current
         else:
             raise Exception("Invariant")
@@ -259,13 +246,13 @@ class Graph:
             if left_neighbor_key is None:
                 left = None
             else:
-                left = self.nodes[left_neighbor_key]
+                left = self.get_node(left_neighbor_key)
 
             right_neighbor_key = node.get_right_neighbor(level)
             if right_neighbor_key is None:
                 right = None
             else:
-                right = self.nodes[right_neighbor_key]
+                right = self.get_node(right_neighbor_key)
 
             if left is not None or right is not None:
                 self._link_nodes(left, right, level)
@@ -285,7 +272,7 @@ class Graph:
                     continue
 
                 if key >= right_key:
-                    right_neighbor = self.nodes[right_key]
+                    right_neighbor = self.get_node(right_key)
                     return self._search(key, right_neighbor, at_level)
             else:
                 raise NotFound
@@ -295,7 +282,7 @@ class Graph:
                     continue
 
                 if key <= left_key:
-                    left_neighbor = self.nodes[left_key]
+                    left_neighbor = self.get_node(left_key)
                     return self._search(key, left_neighbor, at_level)
             else:
                 raise NotFound

@@ -142,7 +142,7 @@ async def test_rpc_locate(w3, rpc_node, peers):
         )
         with trio.fail_after(1):
             await subscription.receive()
-        assert len(found_nodes) == 1
+        assert len(found_nodes) >= 1
         node = found_nodes[0]
         assert node.node_id == bob.client.local_node_id
 
