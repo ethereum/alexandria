@@ -3,7 +3,7 @@ from typing import Collection, Optional, Tuple, Type
 
 from async_service import Service, background_trio_service
 from eth_keys import keys
-from eth_utils import ValidationError
+from eth_utils import ValidationError, int_to_big_endian
 from eth_utils.toolz import partition_all
 from ssz import sedes
 import trio
@@ -22,6 +22,7 @@ from alexandria.abc import (
     NetworkPacket,
     Node,
     SessionAPI,
+    SGNodeAPI,
     TPayload,
 )
 from alexandria.constants import (
@@ -44,8 +45,13 @@ from alexandria.payloads import (
     Advertise, Ack,
     Locate, Locations,
     Retrieve, Chunk,
+    SkipGraphNode,
+    GraphGetIntroduction, GraphIntroduction,
+    GraphGetNode, GraphNode,
+    GraphLinkNodes, GraphLinked,
 )
 from alexandria.tags import recover_source_id_from_tag
+from alexandria.typing import Key
 
 
 class Client(Service, ClientAPI):
@@ -270,12 +276,14 @@ class Client(Service, ClientAPI):
                 Chunk(request_id, 1, 0, b''),
                 node,
             )
+            self.logger.debug("Sending Chunks with empty data to %s", node)
             await self.message_dispatcher.send_message(response)
             await self.events.sent_chunk.trigger(response)
             return 1
 
         all_chunks = split_data_to_chunks(CHUNK_MAX_SIZE, data)
         total_chunks = len(all_chunks)
+        self.logger.debug("Sending %d chuncks for data payload to %s", total_chunks, node)
 
         for index, chunk in enumerate(all_chunks):
             response = Message(
@@ -286,6 +294,94 @@ class Client(Service, ClientAPI):
             await self.events.sent_chunk.trigger(response)
 
         return total_chunks
+
+    #
+    # Send Messages: Skip Graph
+    #
+    async def send_graph_get_introduction(self, node: Node) -> int:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(GraphGetIntroduction(request_id), node)
+        self.logger.debug("Sending %s", message)
+        await self.message_dispatcher.send_message(message)
+        await self.events.sent_graph_get_introduction.trigger(message)
+        return request_id
+
+    async def send_graph_introduction(self,
+                                      node: Node,
+                                      *,
+                                      request_id: int,
+                                      graph_nodes: Collection[SGNodeAPI],
+                                      ) -> None:
+        graph_nodes_payload = tuple(
+            SkipGraphNode.from_sg_node(sg_node) for sg_node in graph_nodes
+        )
+        # TODO: ensure payload size is within bounds
+        message = Message(GraphIntroduction(request_id, graph_nodes_payload), node)
+        self.logger.debug("Sending %s", message)
+        await self.message_dispatcher.send_message(message)
+        await self.events.sent_graph_introduction.trigger(message)
+
+    async def send_graph_get_node(self, node: Node, *, key: Key) -> int:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(GraphGetNode(request_id, int_to_big_endian(key)), node)
+        self.logger.debug("Sending %s", message)
+        await self.message_dispatcher.send_message(message)
+        await self.events.sent_graph_get_node.trigger(message)
+        return request_id
+
+    async def send_graph_node(self,
+                              node: Node,
+                              *,
+                              request_id: int,
+                              sg_node: Optional[SGNodeAPI]) -> None:
+        payload: Optional[SkipGraphNode]
+        if sg_node is None:
+            payload = None
+        else:
+            payload = SkipGraphNode.from_sg_node(sg_node)
+        message = Message(GraphNode(request_id, payload), node)
+        self.logger.debug("Sending %s", message)
+        await self.message_dispatcher.send_message(message)
+        await self.events.sent_graph_node.trigger(message)
+
+    async def send_graph_link_nodes(self,
+                                    node: Node,
+                                    *,
+                                    left: Optional[Key],
+                                    right: Optional[Key],
+                                    level: int) -> int:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+
+        if left is None and right is None:
+            raise TypeError("Invalid request.  One of `left/right` must be non-null")
+
+        left_payload: Optional[bytes]
+        right_payload: Optional[bytes]
+
+        if left is None:
+            left_payload = None
+        else:
+            left_payload = int_to_big_endian(left)
+
+        if right is None:
+            right_payload = None
+        else:
+            right_payload = int_to_big_endian(right)
+
+        message = Message(
+            GraphLinkNodes(request_id, left_payload, right_payload, level),
+            node,
+        )
+        self.logger.debug("Sending %s", message)
+        await self.message_dispatcher.send_message(message)
+        await self.events.sent_graph_link_nodes.trigger(message)
+        return request_id
+
+    async def send_graph_linked(self, node: Node, *, request_id: int) -> None:
+        message = Message(GraphLinked(request_id), node)
+        self.logger.debug("Sending %s", message)
+        await self.message_dispatcher.send_message(message)
+        await self.events.sent_graph_linked.trigger(message)
 
     #
     # Request/Response
@@ -322,6 +418,38 @@ class Client(Service, ClientAPI):
         responses = await self._do_request_with_multi_response(message, Chunk)
         await self.events.sent_retrieve.trigger(message)
         return tuple(sorted(responses, key=lambda response: response.payload.index))
+
+    async def get_graph_introduction(self, node: Node) -> MessageAPI[GraphIntroduction]:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(GraphGetIntroduction(request_id), node)
+        async with self.message_dispatcher.subscribe_request(message, GraphIntroduction) as subscription:  # noqa: E501
+            await self.events.sent_graph_get_introduction.trigger(message)
+            return await subscription.receive()
+
+    async def get_graph_node(self, node: Node, *, key: Key) -> MessageAPI[GraphNode]:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(GraphGetNode(request_id, int_to_big_endian(key)), node)
+        async with self.message_dispatcher.subscribe_request(message, GraphNode) as subscription:  # noqa: E501
+            await self.events.sent_graph_get_node.trigger(message)
+            return await subscription.receive()
+
+    async def link_graph_nodes(self,
+                               node: Node,
+                               *,
+                               left: Key,
+                               right: Key,
+                               level: int,
+                               ) -> MessageAPI[GraphLinked]:
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(GraphLinkNodes(
+            request_id,
+            left=int_to_big_endian(left),
+            right=int_to_big_endian(right),
+            level=level,
+        ), node)
+        async with self.message_dispatcher.subscribe_request(message, GraphLinked) as subscription:  # noqa: E501
+            await self.events.sent_graph_link_nodes.trigger(message)
+            return await subscription.receive()
 
     async def _do_request_with_multi_response(self,
                                               request: MessageAPI[sedes.Serializable],

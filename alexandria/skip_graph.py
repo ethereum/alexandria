@@ -1,11 +1,11 @@
-from abc import ABC, abstractmethod
 import logging
-from typing import Dict, Iterable, List, NewType, Optional, Tuple
+from typing import Dict, Iterator, Optional, Sequence, Tuple
 
 from eth_utils import int_to_big_endian
 
+from alexandria.abc import SGNodeAPI, GraphAPI
 from alexandria._utils import content_key_to_node_id
-from alexandria.typing import NodeID
+from alexandria.typing import Key
 
 
 class NotFound(Exception):
@@ -16,32 +16,24 @@ class AlreadyPresent(Exception):
     pass
 
 
-Key = NewType('Key', int)
-
-
-class SGNode:
-    key: Key
-    neighbors_left: List[Key]
-    neighbors_right: List[Key]
-    membership_vector: NodeID
-    max_level: int
-    delete_flag: bool
-
+class SGNode(SGNodeAPI):
     def __init__(self,
                  key: Key,
-                 neighbors_left: List[Key] = None,
-                 neighbors_right: List[Key] = None,
+                 neighbors_left: Sequence[Key] = None,
+                 neighbors_right: Sequence[Key] = None,
                  ) -> None:
         self.key = key
         self.membership_vector = content_key_to_node_id(int_to_big_endian(key))
 
         if neighbors_left is None:
-            neighbors_left = []
-        self.neighbors_left = neighbors_left
+            self.neighbors_left = []
+        else:
+            self.neighbors_left = list(neighbors_left)
 
         if neighbors_right is None:
-            neighbors_right = []
-        self.neighbors_right = neighbors_right
+            self.neighbors_right = []
+        else:
+            self.neighbors_right = list(neighbors_right)
 
     def __str__(self) -> str:
         return str(self.key)
@@ -107,52 +99,38 @@ class SGNode:
         else:
             raise ValueError(f"Cannot set right neighbor at level #{at_level}: {key}")
 
-    def iter_down_left_levels(self, from_level: int) -> Iterable[Tuple[int, Optional[Key]]]:
+    def iter_down_left_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
         for level in range(from_level, -1, -1):
             yield level, self.get_left_neighbor(level)
 
-    def iter_down_right_levels(self, from_level: int) -> Iterable[Tuple[int, Optional[Key]]]:
+    def iter_down_right_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
         for level in range(from_level, -1, -1):
             yield level, self.get_right_neighbor(level)
-
-
-class GraphAPI(ABC):
-    @abstractmethod
-    async def insert(self, key: Key, anchor: SGNode) -> SGNode:
-        ...
-
-    @abstractmethod
-    async def delete(self, key: Key, anchor: SGNode) -> SGNode:
-        ...
-
-    @abstractmethod
-    async def search(self, key: Key, anchor: SGNode) -> SGNode:
-        ...
 
 
 class Graph(GraphAPI):
     logger = logging.getLogger('alexandria.skip_graph.Graph')
 
-    nodes: Dict[Key, SGNode]
+    nodes: Dict[Key, SGNodeAPI]
 
-    def __init__(self, initial_node: SGNode) -> None:
+    def __init__(self, initial_node: SGNodeAPI) -> None:
         self.nodes = {initial_node.key: initial_node}
 
-    async def insert(self, key: Key, current: SGNode) -> SGNode:
+    async def insert(self, key: Key, current: SGNodeAPI) -> SGNodeAPI:
         self.logger.debug("Inserting: %d", key)
         left_neighbor, right_neighbor = self._search_insert_point(key, current, current.max_level)
         self.logger.debug("Insertion point found: %s < %d < %s", left_neighbor, key, right_neighbor)
-        node = SGNode(key=key)
+        node = SGNodeAPI(key=key)
         return self._insert_at_level(node, left_neighbor, right_neighbor, 0)
 
-    def get_node(self, key: Key) -> SGNode:
+    def get_node(self, key: Key) -> SGNodeAPI:
         return self.nodes[key]
 
     def _insert_at_level(self,
-                         node: SGNode,
-                         left: Optional[SGNode],
-                         right: Optional[SGNode],
-                         level: int) -> SGNode:
+                         node: SGNodeAPI,
+                         left: Optional[SGNodeAPI],
+                         right: Optional[SGNodeAPI],
+                         level: int) -> SGNodeAPI:
         # Link the nodes on the current level
         self._link_nodes(left, node, level)
         self._link_nodes(node, right, level)
@@ -198,8 +176,8 @@ class Graph(GraphAPI):
         return self._insert_at_level(node, left, right, level + 1)
 
     def _link_nodes(self,
-                    left: Optional[SGNode],
-                    right: Optional[SGNode],
+                    left: Optional[SGNodeAPI],
+                    right: Optional[SGNodeAPI],
                     level: int,
                     ) -> None:
         if left is None and right is None:
@@ -214,8 +192,8 @@ class Graph(GraphAPI):
 
     def _search_insert_point(self,
                              key: Key,
-                             current: SGNode,
-                             level: int) -> Tuple[Optional[SGNode], Optional[SGNode]]:
+                             current: SGNodeAPI,
+                             level: int) -> Tuple[Optional[SGNodeAPI], Optional[SGNodeAPI]]:
         if key == current.key:
             raise AlreadyPresent
         elif key > current.key:
@@ -249,12 +227,12 @@ class Graph(GraphAPI):
         else:
             raise Exception("Invariant")
 
-    async def delete(self, key: Key, current: SGNode) -> None:
+    async def delete(self, key: Key, current: SGNodeAPI) -> None:
         self.logger.debug('Deleting: %d', key)
         node = await self.search(key, current)
 
-        left: Optional[SGNode]
-        right: Optional[SGNode]
+        left: Optional[SGNodeAPI]
+        right: Optional[SGNodeAPI]
 
         for level in range(node.max_level, -1, -1):
             left_neighbor_key = node.get_left_neighbor(level)
@@ -274,11 +252,11 @@ class Graph(GraphAPI):
 
         self.nodes.pop(key)
 
-    async def search(self, key: Key, current: SGNode) -> None:
+    async def search(self, key: Key, current: SGNodeAPI) -> None:
         self.logger.debug("Searching: %d", key)
         return self._search(key, current, current.max_level)
 
-    def _search(self, key: Key, current: SGNode, level: int) -> SGNode:
+    def _search(self, key: Key, current: SGNodeAPI, level: int) -> SGNodeAPI:
         if key == current.key:
             return current
         elif key > current.key:

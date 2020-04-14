@@ -19,6 +19,9 @@ from alexandria.payloads import (
     FindNodes, FoundNodes,
     Locate, Locations,
     Ping, Pong,
+    GraphGetIntroduction, GraphIntroduction,
+    GraphGetNode, GraphNode,
+    GraphLinkNodes, GraphLinked,
 )
 
 
@@ -97,3 +100,12 @@ class Events(EventsAPI):
 
         self.sent_retrieve: EventAPI[MessageAPI[Retrieve]] = Event('sent-Retrieve')
         self.sent_chunk: EventAPI[MessageAPI[Chunk]] = Event('sent-Chunk')
+
+        self.sent_graph_get_introduction: EventAPI[MessageAPI[GraphGetIntroduction]] = Event('sent-GraphGetIntroduction')  # noqa: E501
+        self.sent_graph_introduction: EventAPI[MessageAPI[GraphIntroduction]] = Event('sent-GraphIntroduction')  # noqa: E501
+
+        self.sent_graph_get_node: EventAPI[MessageAPI[GraphGetNode]] = Event('sent-GraphGetNode')
+        self.sent_graph_node: EventAPI[MessageAPI[GraphNode]] = Event('sent-GraphNode')
+
+        self.sent_graph_link_nodes: EventAPI[MessageAPI[GraphLinkNodes]] = Event('sent-GraphLinkNodes')  # noqa: E501
+        self.sent_graph_linked: EventAPI[MessageAPI[GraphLinked]] = Event('sent-GraphLinked')

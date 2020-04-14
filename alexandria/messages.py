@@ -9,6 +9,9 @@ from alexandria.payloads import (
     Advertise, Ack,
     Locate, Locations,
     Retrieve, Chunk,
+    GraphGetIntroduction, GraphIntroduction,
+    GraphGetNode, GraphNode,
+    GraphLinkNodes, GraphLinked,
 )
 
 
@@ -48,3 +51,14 @@ default_registry.register(6, Locate)
 default_registry.register(7, Locations)
 default_registry.register(8, Retrieve)
 default_registry.register(9, Chunk)
+
+
+#
+# Skip Graph Messages
+#
+default_registry.register(10, GraphGetIntroduction)
+default_registry.register(11, GraphIntroduction)
+default_registry.register(12, GraphGetNode)
+default_registry.register(13, GraphNode)
+default_registry.register(14, GraphLinkNodes)
+default_registry.register(15, GraphLinked)

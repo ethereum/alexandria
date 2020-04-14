@@ -7,6 +7,7 @@ from typing import (
     Generic,
     Iterator,
     KeysView,
+    List,
     Mapping,
     NamedTuple,
     Optional,
@@ -33,7 +34,7 @@ from alexandria.payloads import (
     Locate, Locations,
     Ping, Pong,
 )
-from alexandria.typing import AES128Key, NodeID, Tag
+from alexandria.typing import Key, AES128Key, NodeID, Tag
 
 
 class PacketAPI(ABC):
@@ -510,6 +511,46 @@ class RoutingTableAPI(Collection[NodeID]):
         ...
 
 
+class SGNodeAPI(ABC):
+    key: Key
+    neighbors_left: List[Key]
+    neighbors_right: List[Key]
+    membership_vector: NodeID
+
+    @property
+    @abstractmethod
+    def max_level(self) -> int:
+        ...
+
+    @abstractmethod
+    def get_membership_at_level(self, at_level: int) -> int:
+        ...
+
+    @abstractmethod
+    def get_right_neighbor(self, at_level: int) -> Optional[Key]:
+        ...
+
+    @abstractmethod
+    def get_left_neighbor(self, at_level: int) -> Optional[Key]:
+        ...
+
+    @abstractmethod
+    def set_left_neighbor(self, at_level: int, key: Optional[Key]) -> None:
+        ...
+
+    @abstractmethod
+    def set_right_neighbor(self, at_level: int, key: Optional[Key]) -> None:
+        ...
+
+    @abstractmethod
+    def iter_down_left_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
+        ...
+
+    @abstractmethod
+    def iter_down_right_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
+        ...
+
+
 class NetworkAPI(ABC):
     @abstractmethod
     async def single_lookup(self, node: Node, *, distance: int) -> Tuple[Node, ...]:
@@ -537,6 +578,23 @@ class NetworkAPI(ABC):
 
     @abstractmethod
     async def retrieve(self, node: Node, *, key: bytes) -> bytes:
+        ...
+
+    @abstractmethod
+    async def get_introduction(self, node: Node) -> Tuple[SGNodeAPI, ...]:
+        ...
+
+    @abstractmethod
+    async def get_node(self, node: Node, *, key: Key) -> Tuple[SGNodeAPI, ...]:
+        ...
+
+    @abstractmethod
+    async def link_nodes(self,
+                         node: Node,
+                         *,
+                         left: Optional[Key],
+                         right: Optional[Key],
+                         level: int) -> None:
         ...
 
 
@@ -681,3 +739,17 @@ class KademliaAPI(ServiceAPI):
     network: NetworkAPI
     routing_table: RoutingTableAPI
     content_manager: ContentManagerAPI
+
+
+class GraphAPI(ABC):
+    @abstractmethod
+    async def insert(self, key: Key, anchor: SGNodeAPI) -> SGNodeAPI:
+        ...
+
+    @abstractmethod
+    async def delete(self, key: Key, anchor: SGNodeAPI) -> SGNodeAPI:
+        ...
+
+    @abstractmethod
+    async def search(self, key: Key, anchor: SGNodeAPI) -> SGNodeAPI:
+        ...

@@ -24,7 +24,8 @@ from alexandria.constants import (
     PING_TIMEOUT,
 )
 from alexandria.routing_table import compute_log_distance, compute_distance
-from alexandria.typing import NodeID
+from alexandria.skip_graph import SGNode
+from alexandria.typing import Key, NodeID
 
 
 LOOKUP_CONCURRENCY_FACTOR = 3  # maximum number of concurrent FindNodes lookups
@@ -189,6 +190,9 @@ class Network(NetworkAPI):
         )
         return sorted_found_nodes
 
+    #
+    # Content Management
+    #
     async def announce(self, key: bytes, who: Node) -> None:
         self.logger.debug("Starting announce for: %s", encode_hex(key))
         content_id = content_key_to_node_id(key)
@@ -224,6 +228,30 @@ class Network(NetworkAPI):
             message.payload.data for message in chunks
         ))
         return data
+
+    #
+    # Graph Management
+    #
+    async def get_introduction(self, node: Node) -> Tuple[SGNode, ...]:
+        response = await self.client.get_graph_introduction(node)
+        return tuple(
+            node.to_sg_node() for node in response.payload.nodes
+        )
+
+    async def get_node(self, node: Node, *, key: Key) -> Tuple[SGNode, ...]:
+        response = await self.client.get_graph_node(node, key=key)
+        if response.payload.node is None:
+            return None
+        else:
+            return response.payload.node.to_sg_node()
+
+    async def link_nodes(self,
+                         node: Node,
+                         *,
+                         left: Optional[Key],
+                         right: Optional[Key],
+                         level: int) -> None:
+        await self.client.link_graph_nodes(node, left=left, right=right, level=level)
 
 
 def iter_closest_nodes(target: NodeID,

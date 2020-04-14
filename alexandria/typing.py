@@ -9,3 +9,6 @@ Tag = NewType("Tag", bytes)
 
 Nonce = NewType("Nonce", bytes)
 IDNonce = NewType("IDNonce", bytes)
+
+# Skip Graph key
+Key = NewType('Key', int)

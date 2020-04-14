@@ -1,8 +1,10 @@
 from typing import Tuple
 
+from eth_utils import big_endian_to_int, int_to_big_endian
 from ssz import sedes
 
-from alexandria.sedes import byte_list
+from alexandria.sedes import byte_list, maybe
+from alexandria.skip_graph import SGNode
 from alexandria.typing import NodeID
 
 NODE_SEDES = sedes.Container((
@@ -126,3 +128,75 @@ class Chunk(sedes.Serializable):  # type: ignore
     total: sedes.uint16
     index: sedes.uint16
     data: bytes
+
+
+#
+# Skip Graph
+#
+class SkipGraphNode(sedes.Serializable):  # type: ignore
+    fields = (
+        ("key", byte_list),
+        ("neighbors_left", sedes.List(byte_list, max_length=2**32)),
+        ("neighbors_right", sedes.List(byte_list, max_length=2**32)),
+    )
+
+    @classmethod
+    def from_sg_node(cls, sg_node: SGNode) -> 'SkipGraphNode':
+        return cls(
+            key=int_to_big_endian(sg_node.key),
+            neighbors_left=tuple(
+                int_to_big_endian(neighbor) for neighbor in sg_node.neighbors_left
+            ),
+            neighbors_right=tuple(
+                int_to_big_endian(neighbor) for neighbor in sg_node.neighbors_right
+            ),
+        )
+
+    def to_sg_node(self) -> SGNode:
+        return SGNode(
+            key=big_endian_to_int(self.key),
+            neighbors_left=tuple(big_endian_to_int(neighbor) for neighbor in self.neighbors_left),
+            neighbors_right=tuple(big_endian_to_int(neighbor) for neighbor in self.neighbors_right),
+        )
+
+
+class GraphGetIntroduction(sedes.Serializable):  # type: ignore
+    fields = (
+        ("request_id", sedes.uint16),
+    )
+
+
+class GraphIntroduction(sedes.Serializable):  # type: ignore
+    fields = (
+        ("request_id", sedes.uint16),
+        ("nodes", sedes.List(SkipGraphNode, max_length=2**32)),
+    )
+
+
+class GraphGetNode(sedes.Serializable):  # type: ignore
+    fields = (
+        ("request_id", sedes.uint16),
+        ("key", byte_list),
+    )
+
+
+class GraphNode(sedes.Serializable):  # type: ignore
+    fields = (
+        ("request_id", sedes.uint16),
+        ("node", maybe(SkipGraphNode)),
+    )
+
+
+class GraphLinkNodes(sedes.Serializable):  # type: ignore
+    fields = (
+        ("request_id", sedes.uint16),
+        ("left", maybe(byte_list)),
+        ("right", maybe(byte_list)),
+        ("level", sedes.uint8),
+    )
+
+
+class GraphLinked(sedes.Serializable):  # type: ignore
+    fields = (
+        ("request_id", sedes.uint16),
+    )
