@@ -1,11 +1,13 @@
-from typing import Tuple
+from typing import Tuple, TYPE_CHECKING
 
 from eth_utils import big_endian_to_int, int_to_big_endian
 from ssz import sedes
 
 from alexandria.sedes import byte_list, maybe
-from alexandria.skip_graph import SGNode
 from alexandria.typing import NodeID
+
+if TYPE_CHECKING:
+    from alexandria.abc import SGNodeAPI
 
 NODE_SEDES = sedes.Container((
     sedes.uint256,
@@ -141,7 +143,7 @@ class SkipGraphNode(sedes.Serializable):  # type: ignore
     )
 
     @classmethod
-    def from_sg_node(cls, sg_node: SGNode) -> 'SkipGraphNode':
+    def from_sg_node(cls, sg_node: 'SGNodeAPI') -> 'SkipGraphNode':
         return cls(
             key=int_to_big_endian(sg_node.key),
             neighbors_left=tuple(
@@ -152,7 +154,8 @@ class SkipGraphNode(sedes.Serializable):  # type: ignore
             ),
         )
 
-    def to_sg_node(self) -> SGNode:
+    def to_sg_node(self) -> 'SGNodeAPI':
+        from alexandria.skip_graph import SGNode
         return SGNode(
             key=big_endian_to_int(self.key),
             neighbors_left=tuple(big_endian_to_int(neighbor) for neighbor in self.neighbors_left),

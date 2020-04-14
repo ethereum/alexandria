@@ -3,8 +3,8 @@ from typing import Dict, Iterator, Optional, Sequence, Tuple
 
 from eth_utils import int_to_big_endian
 
-from alexandria.abc import SGNodeAPI, GraphAPI
 from alexandria._utils import content_key_to_node_id
+from alexandria.abc import SGNodeAPI, GraphAPI
 from alexandria.typing import Key
 
 
@@ -120,7 +120,7 @@ class Graph(GraphAPI):
         self.logger.debug("Inserting: %d", key)
         left_neighbor, right_neighbor = self._search_insert_point(key, current, current.max_level)
         self.logger.debug("Insertion point found: %s < %d < %s", left_neighbor, key, right_neighbor)
-        node = SGNodeAPI(key=key)
+        node = SGNode(key=key)
         return self._insert_at_level(node, left_neighbor, right_neighbor, 0)
 
     def get_node(self, key: Key) -> SGNodeAPI:

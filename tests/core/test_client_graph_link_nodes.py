@@ -23,7 +23,7 @@ async def test_client_link_graph_nodes(alice_and_bob_clients):
             nursery.start_soon(_handle_request)
 
             with trio.fail_after(1):
-                message = await alice.link_graph_node(
+                message = await alice.link_graph_nodes(
                     bob.local_node,
                     left=5,
                     right=7,
@@ -52,7 +52,7 @@ async def test_client_link_graph_nodes_left_null(alice_and_bob_clients):
             nursery.start_soon(_handle_request)
 
             with trio.fail_after(1):
-                message = await alice.link_graph_node(
+                message = await alice.link_graph_nodes(
                     bob.local_node,
                     left=None,
                     right=7,
@@ -81,7 +81,7 @@ async def test_client_link_graph_nodes_right_null(alice_and_bob_clients):
             nursery.start_soon(_handle_request)
 
             with trio.fail_after(1):
-                message = await alice.link_graph_node(
+                message = await alice.link_graph_nodes(
                     bob.local_node,
                     left=5,
                     right=None,

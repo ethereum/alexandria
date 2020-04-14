@@ -436,15 +436,15 @@ class Client(Service, ClientAPI):
     async def link_graph_nodes(self,
                                node: Node,
                                *,
-                               left: Key,
-                               right: Key,
+                               left: Optional[Key],
+                               right: Optional[Key],
                                level: int,
                                ) -> MessageAPI[GraphLinked]:
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(GraphLinkNodes(
             request_id,
-            left=int_to_big_endian(left),
-            right=int_to_big_endian(right),
+            left=None if left is None else int_to_big_endian(left),
+            right=None if right is None else int_to_big_endian(right),
             level=level,
         ), node)
         async with self.message_dispatcher.subscribe_request(message, GraphLinked) as subscription:  # noqa: E501
