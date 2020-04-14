@@ -10,7 +10,6 @@ from alexandria._utils import every, humanize_node_id, content_key_to_node_id
 from alexandria.abc import (
     ClientAPI,
     ContentBundle,
-    ContentManagerAPI,
     DurableDatabaseAPI,
     Endpoint,
     EndpointDatabaseAPI,
@@ -29,6 +28,7 @@ from alexandria.constants import (
 from alexandria.content_manager import AdvertiseTracker, ContentManager
 from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
 from alexandria.routing_table import compute_distance
+from alexandria.skip_graph import GraphDB
 from alexandria.typing import NodeID
 
 
@@ -42,10 +42,7 @@ class _EmptyFindNodesResponse(Exception):
 class Kademlia(Service, KademliaAPI):
     logger = logging.getLogger('alexandria.kademlia.Kademlia')
 
-    client: ClientAPI
-    network: NetworkAPI
-    routing_table: RoutingTableAPI
-    content_manager: ContentManagerAPI
+    _network_graph: Optional[GraphAPI] = None
 
     def __init__(self,
                  routing_table: RoutingTableAPI,
@@ -75,6 +72,16 @@ class Kademlia(Service, KademliaAPI):
             self._inbound_content_receive_channel,
         ) = trio.open_memory_channel[Tuple[Node, bytes]](256)
 
+        self.graph_db = GraphDB()
+        self._local_graph = LocalGraph(SGNode(self.client.local_node_id))
+
+    @property
+    def graph(self) -> GraphAPI:
+        if self._network_graph is None:
+            return self._local_graph
+        else:
+            return self._network_graph
+
     async def run(self) -> None:
         self.manager.run_daemon_task(self._periodic_report_routing_table_status)
 
@@ -93,6 +100,12 @@ class Kademlia(Service, KademliaAPI):
 
         self.manager.run_daemon_task(self._ping_occasionally)
         self.manager.run_daemon_task(self._lookup_occasionally)
+
+        self.manager.run_task(self._initialize_skip_graph)
+        self.manager.run_daemon_task(self._monitor_skip_graph)
+        self.manager.run_daemon_task(self._handle_introduction_requests)
+        self.manager.run_daemon_task(self._handle_link_nodes_requests)
+        self.manager.run_daemon_task(self._handle_get_graph_node_requests)
 
         await self.manager.wait_finished()
 
@@ -139,24 +152,115 @@ class Kademlia(Service, KademliaAPI):
                 content_stats.cache_index_total_capacity,
             )
 
+    async def _initialize_network_graph(self) -> GraphAPI:
+        while self.manager.is_running:
+            random_content_id = secrets.randbits(256)
+            candidates = await self.network.iterative_lookup(random_content_id):
+            for node in candidates:
+                try:
+                    with trio.fail_after(INTRODUCTION_TIMEOUT):
+                        introduction_nodes = await self.network.get_introduction(node)
+                except trio.TooSlowError:
+                    continue
+
+                if len(introduction_nodes) == 0:
+                    continue
+
+                for sg_node in introduction_nodes:
+                    self.graph_db.set(sg_node.key, sg_node)
+
+                self.logger.info("Network SkipGraph initialized")
+                return NetworkGraph(self.graph_db, introduction_nodes[0], self.network)
+            else:
+                self.logger.debug(
+                    f"Failed to initialize network Skip Graph after querying "
+                    f"{len(candidates)} nodes."
+                )
+
     async def _initialize_skip_graph(self) -> None:
-        # 1. get initial introduction
-        # 2. signal that the graph is ready
-        # 3. for each key in our content database insert it into the graph
+        # 1. Get an introduction to the network's SkipGraph
+        self._network_graph = await self._initialize_network_graph()
+
+        # 2. Transfer everything from the temporary "local" SkipGraph into the
+        # network one.
+        for key in self._local_graph.db.keys():
+            if key == self.client.local_node_id:
+                continue
+            try:
+                # TODO: this should be done concurrently
+                await self._network_graph.insert(key)
+            except AlreadyPresent:
+                continue
+
+        # 3. Ensure the network graph is populated with all of our local
+        # content.
         ...
 
     async def _monitor_skip_graph(self) -> None:
-        # scan through the graph looking for broken links and repair them.
+        # A: broken neighbor links to unretrievable nodes.
+        # B: nodes with unretrievable data.
         ...
 
     async def _handle_introduction_requests(self) -> None:
-        ...
+        async with self.client.message_dispatcher.subscribe(GraphGetIntroduction) as subscription:
+            async for request in subscription:
+                self.logger.debug("handling request: %s", request)
+                await self.client.send_graph_introduction(
+                    request.node,
+                    request_id=request.payload.request_id,
+                    graph_nodes=(self.graph.cursor,),
+                )
 
     async def _handle_link_nodes_requests(self) -> None:
-        ...
+        async with self.client.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
+            async for request in subscription:
+                self.logger.debug("handling request: %s", request)
+                # Acknowledge the request first, then do the linking.
+                await self.client.send_graph_linked(
+                    request.node,
+                    request_id=request.payload.request_id,
+                )
+                payload = request.payload
+                left_key = payload.left if payload.left is None else big_endian_to_int(payload.left)
+                right_key = payload.right if payload.right is None else big_endian_to_int(payload.right)  # noqa: E501
+                level = payload.level
+
+                if left_key is not None:
+                    try:
+                        left = self.graph_db.get(left_key)
+                    except KeyError:
+                        pass
+                    else:
+                        # TODO: level could be invalid
+                        left.set_right_neighbor(right_key, level)
+
+                if right_key is not None:
+                    try:
+                        right = self.graph_db.get(right_key)
+                    except KeyError:
+                        pass
+                    else:
+                        # TODO: level could be invalid
+                        right.set_left_neighbor(left_key, level)
 
     async def _handle_get_graph_node_requests(self) -> None:
-        ...
+        async with self.client.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
+            async for request in subscription:
+                self.logger.debug("handling request: %s", request)
+                # Acknowledge the request first, then do the linking.
+                key = big_endian_to_int(request.payload.key)
+
+                sg_node: Optional[SGNode]
+                try:
+                    sg_node = self.graph_db.get(key)
+                except KeyError:
+                    node = None
+
+                await self.client.send_graph_node(
+                    request.node,
+                    request_id=request.payload.request_id,
+                    sg_node=sg_node,
+                )
 
     async def _handle_lookup_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(FindNodes) as subscription:

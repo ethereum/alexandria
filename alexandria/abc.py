@@ -4,6 +4,7 @@ from typing import (
     AsyncContextManager,
     Collection,
     Deque,
+    Dict,
     Generic,
     Iterator,
     KeysView,
@@ -735,11 +736,28 @@ class ContentManagerAPI(ABC):
         ...
 
 
-class KademliaAPI(ServiceAPI):
-    client: ClientAPI
-    network: NetworkAPI
-    routing_table: RoutingTableAPI
-    content_manager: ContentManagerAPI
+class GraphDatabaseAPI(ABC):
+    _db: Dict[Key, SGNodeAPI]
+
+    @abstractmethod
+    def keys(self) -> KeysView[Key]:
+        ...
+
+    @abstractmethod
+    def has(self, key: Key) -> bool:
+        ...
+
+    @abstractmethod
+    def get(self, key: Key) -> SGNodeAPI:
+        ...
+
+    @abstractmethod
+    def set(self, key: Key, node: SGNodeAPI) -> None:
+        ...
+
+    @abstractmethod
+    def delete(self, key: Key) -> None:
+        ...
 
 
 FindResult = Union[
@@ -768,3 +786,12 @@ class GraphAPI(ABC):
     @abstractmethod
     async def search(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
         ...
+
+
+class KademliaAPI(ServiceAPI):
+    client: ClientAPI
+    network: NetworkAPI
+    routing_table: RoutingTableAPI
+    content_manager: ContentManagerAPI
+    graph_db: GraphDatabaseAPI
+    graph: GraphAPI

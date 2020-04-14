@@ -47,7 +47,7 @@ async def do_test_skip_graph_insert_fuzz(anchor_key, keys_to_insert, random_modu
     inserted = {anchor_key}
 
     for key in keys_to_insert:
-        anchor_from = graph.node_db[random.choice(tuple(inserted))]
+        anchor_from = graph.db.get(random.choice(tuple(inserted)))
         if key in inserted:
             with pytest.raises(AlreadyPresent):
                 await graph.insert(key, anchor_from)
@@ -89,7 +89,7 @@ async def do_test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_sea
     inserted = {anchor_key}
 
     for key in keys_to_insert:
-        anchor_from = graph.node_db[random.choice(tuple(inserted))]
+        anchor_from = graph.db.get(random.choice(tuple(inserted)))
         if key in inserted:
             with pytest.raises(AlreadyPresent):
                 await graph.insert(key, anchor_from)
@@ -101,7 +101,7 @@ async def do_test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_sea
     validate_graph(graph)
 
     for key in keys_to_search:
-        search_anchor = graph.node_db[random.choice(tuple(inserted))]
+        search_anchor = graph.db[random.choice(tuple(inserted))]
 
         if key == anchor_key or key in keys_to_insert:
             node = await graph.search(key, search_anchor)

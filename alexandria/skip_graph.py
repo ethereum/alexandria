@@ -1,8 +1,8 @@
 from abc import abstractmethod
 import logging
-from typing import Dict, Iterator, Optional, Sequence, Tuple
+from typing import Dict, Iterator, KeysView, Optional, Sequence, Tuple
 
-from eth_utils import int_to_big_endian
+from eth_utils import int_to_big_endian, ValidationError
 
 from alexandria._utils import content_key_to_node_id
 from alexandria.abc import SGNodeAPI, GraphAPI, FindResult, NetworkAPI
@@ -82,6 +82,8 @@ class SGNode(SGNodeAPI):
                 raise ValueError(f"Cannot set null level ")
             else:
                 pass
+        elif key >= self.key:
+            raise ValidationError(f"Invalid left neighbor: {hex(key)} >= {hex(self.key)}")
         elif at_level == len(self.neighbors_left):
             self.neighbors_left.append(key)
         elif at_level < len(self.neighbors_left):
@@ -97,6 +99,8 @@ class SGNode(SGNodeAPI):
                 raise ValueError(f"Cannot set null level ")
             else:
                 pass
+        elif key <= self.key:
+            raise ValidationError(f"Invalid left neighbor: {hex(key)} >= {hex(self.key)}")
         elif at_level == len(self.neighbors_right):
             self.neighbors_right.append(key)
         elif at_level < len(self.neighbors_right):
@@ -113,13 +117,31 @@ class SGNode(SGNodeAPI):
             yield level, self.get_right_neighbor(level)
 
 
+class GraphDB:
+    _db: Dict[Key, SGNodeAPI]
+
+    def __init__(self) -> None:
+        self._db = {}
+
+    def keys(self) -> KeysView[Key]:
+        return self._db.keys()
+
+    def has(self, key: Key) -> bool:
+        return key in self._db
+
+    def get(self, key: Key) -> SGNodeAPI:
+        return self._db[key]
+
+    def set(self, key: Key, node: SGNodeAPI) -> None:
+        self._db[key] = node
+
+    def delete(self, key: Key) -> None:
+        del self._db[key]
+
+
 class BaseGraph(GraphAPI):
     logger = logging.getLogger('alexandria.skip_graph.Graph')
-    node_db: Dict[Key, SGNodeAPI]
-
-    def __init__(self, cursor: SGNodeAPI) -> None:
-        self.cursor = cursor
-        self.node_db = {cursor.key: cursor}
+    db: GraphDB
 
     @abstractmethod
     async def get_node(self, key: Key) -> SGNodeAPI:
@@ -170,7 +192,7 @@ class BaseGraph(GraphAPI):
 
         # Break if both neighbors are now null
         if left is None and right is None:
-            self.node_db[node.key] = node
+            self.db.set(node.key, node)
             return node
 
         # Now we iterate up the levels.  The `left` and
@@ -239,7 +261,7 @@ class BaseGraph(GraphAPI):
             if left is not None or right is not None:
                 await self._link_nodes(left, right, level)
 
-        self.node_db.pop(key)
+        self.db.delete(key)
 
     async def search(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
         if cursor is None:
@@ -314,9 +336,14 @@ def _link_local_nodes(left: Optional[SGNodeAPI],
 
 
 class LocalGraph(BaseGraph):
+    def __init__(self, cursor: SGNodeAPI) -> None:
+        self.cursor = cursor
+        self.db = GraphDB()
+        self.db.set(cursor.key, cursor)
+
     async def get_node(self, key: Key) -> SGNodeAPI:
         try:
-            return self.node_db[key]
+            return self.node_db.get(key)
         except KeyError as err:
             raise Missing from err
 
@@ -328,18 +355,19 @@ class LocalGraph(BaseGraph):
 
 
 class NetworkGraph(BaseGraph):
-    nodes: Dict[Key, SGNodeAPI]
-
     def __init__(self,
+                 db: GraphDB,
                  cursor: SGNodeAPI,
                  network: NetworkAPI) -> None:
-        self.node_db = {cursor.key: cursor}
+        self.db = db
+        self.db.set(cursor.key, cursor)
+
         self.cursor = cursor
         self._network = network
 
     async def get_node(self, key: Key) -> SGNodeAPI:
         try:
-            return self._node_db[key]
+            return self.db.get(key)
         except KeyError:
             try:
                 return await self.network.get_node(key)

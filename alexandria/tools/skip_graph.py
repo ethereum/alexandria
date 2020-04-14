@@ -2,7 +2,7 @@ from alexandria.abc import GraphAPI, SGNodeAPI
 
 
 def validate_graph(graph: GraphAPI):
-    for node in graph.node_db.values():
+    for node in graph.node_db._db.values():
         validate_node(graph, node)
 
 
@@ -64,7 +64,7 @@ def _assert_node_right_neighbor_validity(graph: GraphAPI, node: SGNodeAPI):
 
         # Make sure the right neighbor correctly thinks this node is its left neighbor
         assert right_neighbor_key > node.key
-        right_neighbor = graph.node_db[right_neighbor_key]
+        right_neighbor = graph.db.get(right_neighbor_key)
         assert right_neighbor.get_left_neighbor(level) == node.key
 
         if level > 0:
