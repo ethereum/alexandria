@@ -787,6 +787,12 @@ class GraphAPI(ABC):
     async def search(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
         ...
 
+    @abstractmethod
+    async def iter_keys(self,
+                        start: Optional[Key] = None,
+                        end: Optional[Key] = None) -> Iterator[Key]:
+        ...
+
 
 class KademliaAPI(ServiceAPI):
     client: ClientAPI

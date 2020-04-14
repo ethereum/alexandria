@@ -3,7 +3,7 @@ import secrets
 from typing import Iterable, Optional, Tuple
 
 from async_service import Service
-from eth_utils import encode_hex, to_tuple
+from eth_utils import encode_hex, to_tuple, big_endian_to_int, ValidationError
 import trio
 
 from alexandria._utils import every, humanize_node_id, content_key_to_node_id
@@ -13,6 +13,7 @@ from alexandria.abc import (
     DurableDatabaseAPI,
     Endpoint,
     EndpointDatabaseAPI,
+    GraphAPI,
     KademliaAPI,
     NetworkAPI,
     Node,
@@ -24,11 +25,29 @@ from alexandria.constants import (
     ANNOUNCE_TIMEOUT,
     KADEMLIA_ANNOUNCE_INTERVAL,
     KADEMLIA_ANNOUNCE_CONCURRENCY,
+    INTRODUCTION_TIMEOUT,
+    INSERT_TIMEOUT,
 )
 from alexandria.content_manager import AdvertiseTracker, ContentManager
-from alexandria.payloads import FindNodes, Ping, Advertise, Locate, Retrieve
+from alexandria.payloads import (
+    FindNodes,
+    Ping,
+    Advertise,
+    Locate,
+    Retrieve,
+    GraphGetIntroduction,
+    GraphGetNode,
+    GraphLinkNodes,
+)
 from alexandria.routing_table import compute_distance
-from alexandria.skip_graph import GraphDB
+from alexandria.skip_graph import (
+    GraphDB,
+    NetworkGraph,
+    LocalGraph,
+    SGNode,
+    AlreadyPresent,
+    NotFound,
+)
 from alexandria.typing import NodeID
 
 
@@ -155,7 +174,7 @@ class Kademlia(Service, KademliaAPI):
     async def _initialize_network_graph(self) -> GraphAPI:
         while self.manager.is_running:
             random_content_id = secrets.randbits(256)
-            candidates = await self.network.iterative_lookup(random_content_id):
+            candidates = await self.network.iterative_lookup(random_content_id)
             for node in candidates:
                 try:
                     with trio.fail_after(INTRODUCTION_TIMEOUT):
@@ -199,7 +218,37 @@ class Kademlia(Service, KademliaAPI):
     async def _monitor_skip_graph(self) -> None:
         # A: broken neighbor links to unretrievable nodes.
         # B: nodes with unretrievable data.
-        ...
+        while self.manager.is_running:
+            await trio.hazmat.checkpoint()
+            self.logger.debug("Starting scan of skip graph....")
+            for key in self.graph_db.keys():
+                try:
+                    node = await self.graph.search(key)
+                except NotFound:
+                    self.logger.info(
+                        f"Local value from graph database not found in search: "
+                        f"{hex(key)}. Attempting re-insertion"
+                    )
+                    with trio.fail_after(INSERT_TIMEOUT):
+                        node = await self.graph.insert(key)
+                        continue
+
+                # Iterate over all neighbor links and validate that they point
+                # to retrievable nodes and that the node reflexively shares the
+                # neighbor relationship.  In both cases re-insertion of the
+                # node *should* repair things (TODO: is this accurate?)
+                for level, (left_key, right_key) in enumerate(node.iter_neighbors()):
+                    left = await self.graph.search(left_key)
+                    if left.get_right_neighbor(level) != key:
+                        with trio.fail_after(INSERT_TIMEOUT):
+                            await self.graph.insert(key)
+                            break
+
+                    right = await self.graph.search(right_key)
+                    if right.get_left_neighbor(level) != key:
+                        with trio.fail_after(INSERT_TIMEOUT):
+                            await self.graph.insert(key)
+                            break
 
     async def _handle_introduction_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphGetIntroduction) as subscription:
@@ -231,8 +280,11 @@ class Kademlia(Service, KademliaAPI):
                     except KeyError:
                         pass
                     else:
-                        # TODO: level could be invalid
-                        left.set_right_neighbor(right_key, level)
+                        try:
+                            left.set_right_neighbor(right_key, level)
+                        except ValidationError as err:
+                            self.logger.debug("Error updating neighbor:", exc_info=True)
+                            self.logger.info("Error updating neighbor: %s", str(err))
 
                 if right_key is not None:
                     try:
@@ -240,11 +292,14 @@ class Kademlia(Service, KademliaAPI):
                     except KeyError:
                         pass
                     else:
-                        # TODO: level could be invalid
-                        right.set_left_neighbor(left_key, level)
+                        try:
+                            right.set_left_neighbor(left_key, level)
+                        except ValidationError as err:
+                            self.logger.debug("Error updating neighbor:", exc_info=True)
+                            self.logger.info("Error updating neighbor: %s", str(err))
 
     async def _handle_get_graph_node_requests(self) -> None:
-        async with self.client.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
+        async with self.client.message_dispatcher.subscribe(GraphGetNode) as subscription:
             async for request in subscription:
                 self.logger.debug("handling request: %s", request)
                 # Acknowledge the request first, then do the linking.
@@ -254,7 +309,7 @@ class Kademlia(Service, KademliaAPI):
                 try:
                     sg_node = self.graph_db.get(key)
                 except KeyError:
-                    node = None
+                    sg_node = None
 
                 await self.client.send_graph_node(
                     request.node,
@@ -362,6 +417,12 @@ class Kademlia(Service, KademliaAPI):
         )
 
         async def do_announce(key):
+            with trio.move_on_after(INSERT_TIMEOUT):
+                try:
+                    await self.graph.insert(key)
+                except AlreadyPresent:
+                    pass
+
             with trio.move_on_after(ANNOUNCE_TIMEOUT):
                 await self.network.announce(
                     key,

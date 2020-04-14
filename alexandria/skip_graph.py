@@ -1,8 +1,10 @@
 from abc import abstractmethod
+import itertools
 import logging
-from typing import Dict, Iterator, KeysView, Optional, Sequence, Tuple
+from typing import AsyncIterator, Dict, Iterator, KeysView, Optional, Sequence, Tuple
 
 from eth_utils import int_to_big_endian, ValidationError
+import trio
 
 from alexandria._utils import content_key_to_node_id
 from alexandria.abc import SGNodeAPI, GraphAPI, FindResult, NetworkAPI
@@ -79,7 +81,10 @@ class SGNode(SGNodeAPI):
             if at_level == len(self.neighbors_left) - 1:
                 self.neighbors_left.pop()
             elif at_level < len(self.neighbors_left):
-                raise ValueError(f"Cannot set null level ")
+                raise ValidationError(
+                    f"Invalid level for null neighbor: level={at_level} < "
+                    f"num_left_neighbors={len(self.neighbors_left)}"
+                )
             else:
                 pass
         elif key >= self.key:
@@ -89,14 +94,17 @@ class SGNode(SGNodeAPI):
         elif at_level < len(self.neighbors_left):
             self.neighbors_left[at_level] = key
         else:
-            raise ValueError(f"Cannot set left neighbor at level #{at_level}: {key}")
+            raise ValidationError(f"Cannot set left neighbor at level #{at_level}: {hex(key)}")
 
     def set_right_neighbor(self, at_level: int, key: Optional[Key]) -> None:
         if key is None:
             if at_level == len(self.neighbors_right) - 1:
                 self.neighbors_right.pop()
             elif at_level < len(self.neighbors_right):
-                raise ValueError(f"Cannot set null level ")
+                raise ValidationError(
+                    f"Invalid level for null neighbor: level={at_level} < "
+                    f"num_right_neighbors={len(self.neighbors_right)}"
+                )
             else:
                 pass
         elif key <= self.key:
@@ -106,7 +114,11 @@ class SGNode(SGNodeAPI):
         elif at_level < len(self.neighbors_right):
             self.neighbors_right[at_level] = key
         else:
-            raise ValueError(f"Cannot set right neighbor at level #{at_level}: {key}")
+            raise ValidationError(f"Cannot set right neighbor at level #{at_level}: {hex(key)}")
+
+    def iter_neighbors(self) -> Iterator[Tuple[Optional[Key], Optional[Key]]]:
+        yield from itertools.zip_longest(self.neighbors_left, self.neighbors_right, fillvalue=None)
+        yield None, None
 
     def iter_down_left_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
         for level in range(from_level, -1, -1):
@@ -318,6 +330,27 @@ class BaseGraph(GraphAPI):
                 return left_neighbor, None, cursor
         else:
             raise Exception("Invariant")
+
+    async def iter(self,
+                   start: Optional[Key] = None,
+                   end: Optional[Key] = None,
+                   level: int = 0) -> AsyncIterator[Key]:
+        if start is None:
+            left, node, right = await self.find(0)
+            if node is not None:
+                cursor = node
+            elif left is not None:
+                cursor = left
+            else:
+                raise Exception("Invariant")
+        else:
+            cursor = start
+
+        while cursor is not None:
+            await trio.hazmat.checkpoint()
+            yield cursor
+
+            cursor = self._get_right_neighbor(cursor, level)
 
 
 def _link_local_nodes(left: Optional[SGNodeAPI],

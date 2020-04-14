@@ -1,5 +1,7 @@
 import pytest
 
+from eth_utils import ValidationError
+
 from alexandria.skip_graph import SGNode
 
 
@@ -34,6 +36,8 @@ def test_single_node_with_only_right_neighbor():
     assert tuple(node.iter_down_left_levels(1)) == ((1, None), (0, None))
     assert tuple(node.iter_down_right_levels(1)) == ((1, None), (0, 1))
 
+    assert tuple(node.iter_neighbors()) == ((None, 1), (None, None))
+
 
 def test_single_node_with_only_left_neighbor():
     node = SGNode(1, neighbors_left=[0])
@@ -52,6 +56,8 @@ def test_single_node_with_only_left_neighbor():
 
     assert tuple(node.iter_down_left_levels(1)) == ((1, None), (0, 0))
     assert tuple(node.iter_down_right_levels(1)) == ((1, None), (0, None))
+
+    assert tuple(node.iter_neighbors()) == ((0, None), (None, None))
 
 
 def test_single_node_with_both_neighbors():
@@ -84,6 +90,8 @@ def test_single_node_with_both_neighbors():
     assert tuple(node.iter_down_left_levels(3)) == ((3, None), (2, None), (1, 0), (0, 2))
     assert tuple(node.iter_down_right_levels(3)) == ((3, None), (2, 28), (1, 12), (0, 8))
 
+    assert tuple(node.iter_neighbors()) == ((2, 8), (0, 12), (None, 28), (None, None))
+
 
 def test_single_node_neighbor_setting():
     node = SGNode(4)
@@ -106,14 +114,14 @@ def test_single_node_neighbor_setting():
     assert node.get_right_neighbor(0) is None
 
     # should be an error to set a neighbor above the topmost non-null neighbor.
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         node.set_right_neighbor(1, 12)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         node.set_right_neighbor(2, 28)
 
     node.set_right_neighbor(0, 8)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         node.set_right_neighbor(2, 28)
 
     assert node.max_level == 2
@@ -146,9 +154,9 @@ def test_single_node_neighbor_setting():
     assert node.get_right_neighbor(5) is None
     assert node.get_right_neighbor(6) is None
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         node.set_right_neighbor(1, None)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         node.set_right_neighbor(0, None)
     node.set_right_neighbor(2, None)
 
@@ -161,7 +169,7 @@ def test_single_node_neighbor_setting():
     assert node.get_right_neighbor(5) is None
     assert node.get_right_neighbor(6) is None
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         node.set_right_neighbor(0, None)
     node.set_right_neighbor(1, None)
 
