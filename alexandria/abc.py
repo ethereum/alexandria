@@ -751,18 +751,20 @@ FindResult = Union[
 
 
 class GraphAPI(ABC):
+    cursor: SGNodeAPI
+
     @abstractmethod
-    async def insert(self, key: Key, anchor: SGNodeAPI) -> SGNodeAPI:
+    async def insert(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
         ...
 
     @abstractmethod
-    async def delete(self, key: Key, anchor: SGNodeAPI) -> None:
+    async def delete(self, key: Key, cursor: Optional[SGNodeAPI]) -> None:
         ...
 
     @abstractmethod
-    async def find(self, key: Key, anchor: SGNodeAPI) -> FindResult:
+    async def find(self, key: Key, cursor: Optional[SGNodeAPI]) -> FindResult:
         ...
 
     @abstractmethod
-    async def search(self, key: Key, anchor: SGNodeAPI) -> SGNodeAPI:
+    async def search(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
         ...

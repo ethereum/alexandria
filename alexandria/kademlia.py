@@ -139,6 +139,25 @@ class Kademlia(Service, KademliaAPI):
                 content_stats.cache_index_total_capacity,
             )
 
+    async def _initialize_skip_graph(self) -> None:
+        # 1. get initial introduction
+        # 2. signal that the graph is ready
+        # 3. for each key in our content database insert it into the graph
+        ...
+
+    async def _monitor_skip_graph(self) -> None:
+        # scan through the graph looking for broken links and repair them.
+        ...
+
+    async def _handle_introduction_requests(self) -> None:
+        ...
+
+    async def _handle_link_nodes_requests(self) -> None:
+        ...
+
+    async def _handle_get_graph_node_requests(self) -> None:
+        ...
+
     async def _handle_lookup_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(FindNodes) as subscription:
             while self.manager.is_running:

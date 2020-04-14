@@ -5,7 +5,7 @@ from typing import Dict, Iterator, Optional, Sequence, Tuple
 from eth_utils import int_to_big_endian
 
 from alexandria._utils import content_key_to_node_id
-from alexandria.abc import SGNodeAPI, GraphAPI, FindResult
+from alexandria.abc import SGNodeAPI, GraphAPI, FindResult, NetworkAPI
 from alexandria.typing import Key
 
 
@@ -14,6 +14,10 @@ class NotFound(Exception):
 
 
 class AlreadyPresent(Exception):
+    pass
+
+
+class Missing(Exception):
     pass
 
 
@@ -111,14 +115,28 @@ class SGNode(SGNodeAPI):
 
 class BaseGraph(GraphAPI):
     logger = logging.getLogger('alexandria.skip_graph.Graph')
+    node_db: Dict[Key, SGNodeAPI]
+
+    def __init__(self, cursor: SGNodeAPI) -> None:
+        self.cursor = cursor
+        self.node_db = {cursor.key: cursor}
 
     @abstractmethod
     async def get_node(self, key: Key) -> SGNodeAPI:
         ...
 
-    async def insert(self, key: Key, current: SGNodeAPI) -> SGNodeAPI:
+    @abstractmethod
+    async def link_nodes(self,
+                         left: Optional[SGNodeAPI],
+                         right: Optional[SGNodeAPI],
+                         level: int) -> None:
+        ...
+
+    async def insert(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
+        if cursor is None:
+            cursor = self.cursor
         self.logger.debug("Inserting: %d", key)
-        left_neighbor, found, right_neighbor = await self._search(key, current, current.max_level)
+        left_neighbor, found, right_neighbor = await self._search(key, cursor, cursor.max_level)
         if found is not None:
             raise AlreadyPresent(f"Key already present: {found}")
         self.logger.debug("Insertion point found: %s < %d < %s", left_neighbor, key, right_neighbor)
@@ -144,7 +162,7 @@ class BaseGraph(GraphAPI):
                                left: Optional[SGNodeAPI],
                                right: Optional[SGNodeAPI],
                                level: int) -> SGNodeAPI:
-        # Link the nodes on the current level
+        # Link the nodes on the cursor level
         await self._link_nodes(left, node, level)
         await self._link_nodes(node, right, level)
 
@@ -152,7 +170,7 @@ class BaseGraph(GraphAPI):
 
         # Break if both neighbors are now null
         if left is None and right is None:
-            self.nodes[node.key] = node
+            self.node_db[node.key] = node
             return node
 
         # Now we iterate up the levels.  The `left` and
@@ -196,9 +214,19 @@ class BaseGraph(GraphAPI):
             left.set_right_neighbor(level, right.key)
             right.set_left_neighbor(level, left.key)
 
-    async def delete(self, key: Key, current: SGNodeAPI) -> None:
+    async def delete(self, key: Key, cursor: Optional[SGNodeAPI]) -> None:
+        if cursor is None:
+            cursor = self.cursor
         self.logger.debug('Deleting: %d', key)
-        node = await self.search(key, current)
+        node = await self.search(key, cursor)
+
+        if key == self.cursor.key:
+            if node.get_right_neighbor(0) is not None:
+                self.cursor = await self._get_right_neighbor(node, 0)
+            elif node.get_left_neighbor(0) is not None:
+                self.cursor = await self._get_left_neighbor(node, 0)
+            else:
+                raise Exception("Attempt to delete last remaining tree node")
 
         left: Optional[SGNodeAPI]
         right: Optional[SGNodeAPI]
@@ -211,11 +239,13 @@ class BaseGraph(GraphAPI):
             if left is not None or right is not None:
                 await self._link_nodes(left, right, level)
 
-        self.nodes.pop(key)
+        self.node_db.pop(key)
 
-    async def search(self, key: Key, current: SGNodeAPI) -> SGNodeAPI:
+    async def search(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
+        if cursor is None:
+            cursor = self.cursor
         self.logger.debug("Searching: %d", key)
-        left, node, right = await self._search(key, current, current.max_level)
+        left, node, right = await self._search(key, cursor, cursor.max_level)
         if node is None:
             raise NotFound(
                 f"Node not found for key={hex(key)}.  Closest neighbors were: {left} / {right}"
@@ -224,18 +254,20 @@ class BaseGraph(GraphAPI):
 
     async def find(self,
                    key: Key,
-                   current: SGNodeAPI,
+                   cursor: Optional[SGNodeAPI],
                    ) -> FindResult:
-        return await self._search(key, current, current.max_level)
+        if cursor is None:
+            cursor = self.cursor
+        return await self._search(key, cursor, cursor.max_level)
 
     async def _search(self,
                       key: Key,
-                      current: SGNodeAPI,
+                      cursor: SGNodeAPI,
                       level: int) -> FindResult:
-        if key == current.key:
-            return None, current, None
-        elif key > current.key:
-            for at_level, right_key in current.iter_down_right_levels(level):
+        if key == cursor.key:
+            return None, cursor, None
+        elif key > cursor.key:
+            for at_level, right_key in cursor.iter_down_right_levels(level):
                 if right_key is None:
                     continue
 
@@ -243,13 +275,13 @@ class BaseGraph(GraphAPI):
                     right_neighbor = await self.get_node(right_key)
                     return await self._search(key, right_neighbor, at_level)
             else:
-                right_neighbor_key = current.get_right_neighbor(0)
+                right_neighbor_key = cursor.get_right_neighbor(0)
                 if right_neighbor_key is None:
-                    return current, None, None
+                    return cursor, None, None
                 right_neighbor = await self.get_node(right_neighbor_key)
-                return current, None, right_neighbor
-        elif key < current.key:
-            for at_level, left_key in current.iter_down_left_levels(level):
+                return cursor, None, right_neighbor
+        elif key < cursor.key:
+            for at_level, left_key in cursor.iter_down_left_levels(level):
                 if left_key is None:
                     continue
 
@@ -257,20 +289,66 @@ class BaseGraph(GraphAPI):
                     left_neighbor = await self.get_node(left_key)
                     return await self._search(key, left_neighbor, at_level)
             else:
-                left_neighbor_key = current.get_left_neighbor(0)
+                left_neighbor_key = cursor.get_left_neighbor(0)
                 if left_neighbor_key is None:
-                    return None, None, current
+                    return None, None, cursor
                 left_neighbor = await self.get_node(left_neighbor_key)
-                return left_neighbor, None, current
+                return left_neighbor, None, cursor
         else:
             raise Exception("Invariant")
 
 
+def _link_local_nodes(left: Optional[SGNodeAPI],
+                      right: Optional[SGNodeAPI],
+                      level: int,
+                      ) -> None:
+    if left is None and right is None:
+        raise Exception("Invariant")
+    elif left is None:
+        right.set_left_neighbor(level, None)
+    elif right is None:
+        left.set_right_neighbor(level, None)
+    else:
+        left.set_right_neighbor(level, right.key)
+        right.set_left_neighbor(level, left.key)
+
+
 class LocalGraph(BaseGraph):
+    async def get_node(self, key: Key) -> SGNodeAPI:
+        try:
+            return self.node_db[key]
+        except KeyError as err:
+            raise Missing from err
+
+    async def link_nodes(self,
+                         left: Optional[SGNodeAPI],
+                         right: Optional[SGNodeAPI],
+                         level: int) -> None:
+        _link_local_nodes(left, right, level)
+
+
+class NetworkGraph(BaseGraph):
     nodes: Dict[Key, SGNodeAPI]
 
-    def __init__(self, initial_node: SGNodeAPI) -> None:
-        self.nodes = {initial_node.key: initial_node}
+    def __init__(self,
+                 cursor: SGNodeAPI,
+                 network: NetworkAPI) -> None:
+        self.node_db = {cursor.key: cursor}
+        self.cursor = cursor
+        self._network = network
 
     async def get_node(self, key: Key) -> SGNodeAPI:
-        return self.nodes[key]
+        try:
+            return self._node_db[key]
+        except KeyError:
+            try:
+                return await self.network.get_node(key)
+            except NotFound as err:
+                raise Missing from err
+
+    async def link_nodes(self,
+                         left: Optional[SGNodeAPI],
+                         right: Optional[SGNodeAPI],
+                         level: int) -> None:
+        _link_local_nodes(left, right, level)
+        await self.network.link_nodes(left, right, level)

@@ -16,15 +16,17 @@ from alexandria.abc import (
     NetworkAPI,
     Node,
     RoutingTableAPI,
+    SGNodeAPI,
 )
 from alexandria.constants import (
     FIND_NODES_TIMEOUT,
     ADVERTISE_TIMEOUT,
     KADEMLIA_ANNOUNCE_CONCURRENCY,
     PING_TIMEOUT,
+    LINK_TIMEOUT,
 )
 from alexandria.routing_table import compute_log_distance, compute_distance
-from alexandria.skip_graph import SGNode
+from alexandria.skip_graph import NotFound
 from alexandria.typing import Key, NodeID
 
 
@@ -232,26 +234,63 @@ class Network(NetworkAPI):
     #
     # Graph Management
     #
-    async def get_introduction(self, node: Node) -> Tuple[SGNode, ...]:
+    async def get_introduction(self, node: Node) -> Tuple[SGNodeAPI, ...]:
         response = await self.client.get_graph_introduction(node)
         return tuple(
             node.to_sg_node() for node in response.payload.nodes
         )
 
-    async def get_node(self, node: Node, *, key: Key) -> Tuple[SGNode, ...]:
-        response = await self.client.get_graph_node(node, key=key)
-        if response.payload.node is None:
-            return None
+    async def get_node(self, key: Key) -> SGNodeAPI:
+        content_id = content_key_to_node_id(key)
+        nodes_near_content = await self.iterative_lookup(content_id)
+        queried: Set[NodeID] = set()
+
+        # TODO: these lookups can happen concurrently....
+        for node in nodes_near_content:
+            for location in await self.locate(node, key=key):
+                if location.node_id in queried:
+                    continue
+                queried.add(location.node_id)
+                try:
+                    return await self.get_node(node, key)
+                except NotFound:
+                    continue
         else:
-            return response.payload.node.to_sg_node()
+            raise NotFound(
+                f"Could not find node after querying {len(queried)} "
+                f"locations provided by {len(nodes_near_content)} nodes"
+            )
 
     async def link_nodes(self,
-                         node: Node,
-                         *,
                          left: Optional[Key],
                          right: Optional[Key],
                          level: int) -> None:
-        await self.client.link_graph_nodes(node, left=left, right=right, level=level)
+        if left is None and right is None:
+            raise TypeError("Invalid: one key must be non-null")
+
+        updated: Set[NodeID] = set()
+
+        async def do_link(location: Node):
+            with trio.move_on_after(LINK_TIMEOUT):
+                await self.client.link_graph_nodes(
+                    location,
+                    left=left,
+                    right=right,
+                    level=level,
+                )
+
+        async with trio.open_nursery() as nursery:
+            for key in (left, right):
+                if key is None:
+                    continue
+                content_id = content_key_to_node_id(key)
+                for node in await self.iterative_lookup(content_id):
+                    for location in await self.locate(node, key=key):
+                        if location.node_id in updated:
+                            continue
+                    updated.add(location.node_id)
+                    # TODO: concurrency and timeout
+                    nursery.start_soon(do_link, location)
 
 
 def iter_closest_nodes(target: NodeID,
