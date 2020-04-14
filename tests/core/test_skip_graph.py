@@ -1,13 +1,13 @@
 import pytest
 
 from alexandria.tools.skip_graph import validate_graph
-from alexandria.skip_graph import SGNode, Graph, NotFound
+from alexandria.skip_graph import SGNode, LocalGraph, NotFound
 
 
 @pytest.mark.trio
 async def test_insert_far_right():
     anchor = SGNode(0)
-    graph = Graph(anchor)
+    graph = LocalGraph(anchor)
 
     node = await graph.insert(1, anchor)
     assert node.key == 1
@@ -23,7 +23,7 @@ async def test_insert_far_right():
 @pytest.mark.trio
 async def test_insert_sequential_to_the_right_in_order():
     anchor = SGNode(0)
-    graph = Graph(anchor)
+    graph = LocalGraph(anchor)
 
     node_1, node_2, node_3 = tuple([
         await graph.insert(key, anchor) for key in (1, 2, 3)
@@ -47,7 +47,7 @@ async def test_insert_sequential_to_the_right_in_order():
 @pytest.mark.trio
 async def test_insert_sequential_to_the_right_mixed_order():
     anchor = SGNode(0)
-    graph = Graph(anchor)
+    graph = LocalGraph(anchor)
 
     node_3, node_1, node_2 = tuple([
         await graph.insert(key, anchor) for key in (3, 1, 2)
@@ -71,7 +71,7 @@ async def test_insert_sequential_to_the_right_mixed_order():
 @pytest.mark.trio
 async def test_insert_far_left():
     anchor = SGNode(1)
-    graph = Graph(anchor)
+    graph = LocalGraph(anchor)
 
     node = await graph.insert(0, anchor)
     assert node.key == 0
@@ -87,7 +87,7 @@ async def test_insert_far_left():
 @pytest.mark.trio
 async def test_search():
     anchor = SGNode(0)
-    graph = Graph(anchor)
+    graph = LocalGraph(anchor)
 
     for key in range(5, 100, 5):
         result = await graph.insert(key, anchor)
@@ -126,7 +126,7 @@ async def test_search():
 @pytest.mark.trio
 async def test_delete(key_order):
     anchor = SGNode(4)
-    graph = Graph(anchor)
+    graph = LocalGraph(anchor)
 
     for key in sorted(key_order):
         await graph.insert(key, anchor)

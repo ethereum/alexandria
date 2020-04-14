@@ -1,18 +1,18 @@
-from alexandria.skip_graph import SGNode, Graph
+from alexandria.abc import GraphAPI, SGNodeAPI
 
 
-def validate_graph(graph: Graph):
+def validate_graph(graph: GraphAPI):
     for node in graph.nodes.values():
         validate_node(graph, node)
 
 
-def validate_node(graph: Graph, node: SGNode):
+def validate_node(graph: GraphAPI, node: SGNodeAPI):
     assert node.key in graph.nodes
     _assert_node_left_neighbor_validity(graph, node)
     _assert_node_right_neighbor_validity(graph, node)
 
 
-def _assert_node_left_neighbor_validity(graph, node):
+def _assert_node_left_neighbor_validity(graph: GraphAPI, node: SGNodeAPI):
     for level, left_neighbor_key in node.iter_down_left_levels(node.max_level):
         # sanity
         assert node.get_left_neighbor(level) == left_neighbor_key
@@ -43,7 +43,7 @@ def _assert_node_left_neighbor_validity(graph, node):
             assert node_membership_vector == left_neighbor_membership_vector
 
 
-def _assert_node_right_neighbor_validity(graph, node):
+def _assert_node_right_neighbor_validity(graph: GraphAPI, node: SGNodeAPI):
     for level, right_neighbor_key in node.iter_down_right_levels(node.max_level):
         # sanity
         assert node.get_right_neighbor(level) == right_neighbor_key

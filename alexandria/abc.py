@@ -16,6 +16,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    Union,
 )
 from urllib import parse as urlparse
 import uuid
@@ -741,13 +742,25 @@ class KademliaAPI(ServiceAPI):
     content_manager: ContentManagerAPI
 
 
+FindResult = Union[
+    Tuple[None, SGNodeAPI, None],
+    Tuple[SGNodeAPI, None, None],
+    Tuple[SGNodeAPI, None, SGNodeAPI],
+    Tuple[None, None, SGNodeAPI],
+]
+
+
 class GraphAPI(ABC):
     @abstractmethod
     async def insert(self, key: Key, anchor: SGNodeAPI) -> SGNodeAPI:
         ...
 
     @abstractmethod
-    async def delete(self, key: Key, anchor: SGNodeAPI) -> SGNodeAPI:
+    async def delete(self, key: Key, anchor: SGNodeAPI) -> None:
+        ...
+
+    @abstractmethod
+    async def find(self, key: Key, anchor: SGNodeAPI) -> FindResult:
         ...
 
     @abstractmethod

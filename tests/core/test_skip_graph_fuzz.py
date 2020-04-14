@@ -4,7 +4,7 @@ import pytest
 import trio
 
 from alexandria.tools.skip_graph import validate_graph
-from alexandria.skip_graph import SGNode, Graph, AlreadyPresent, NotFound
+from alexandria.skip_graph import SGNode, LocalGraph, AlreadyPresent, NotFound
 
 from hypothesis import (
     strategies as st,
@@ -42,7 +42,7 @@ def test_skip_graph_insert_fuzz(anchor_key, keys_to_insert, random_module):
 
 async def do_test_skip_graph_insert_fuzz(anchor_key, keys_to_insert, random_module):
     anchor = SGNode(anchor_key)
-    graph = Graph(anchor)
+    graph = LocalGraph(anchor)
 
     inserted = {anchor_key}
 
@@ -84,7 +84,7 @@ def test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_search, rand
 
 async def do_test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_search, random_module):
     anchor = SGNode(anchor_key)
-    graph = Graph(anchor)
+    graph = LocalGraph(anchor)
 
     inserted = {anchor_key}
 

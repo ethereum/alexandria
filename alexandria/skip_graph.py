@@ -1,10 +1,11 @@
+from abc import abstractmethod
 import logging
 from typing import Dict, Iterator, Optional, Sequence, Tuple
 
 from eth_utils import int_to_big_endian
 
 from alexandria._utils import content_key_to_node_id
-from alexandria.abc import SGNodeAPI, GraphAPI
+from alexandria.abc import SGNodeAPI, GraphAPI, FindResult
 from alexandria.typing import Key
 
 
@@ -108,32 +109,44 @@ class SGNode(SGNodeAPI):
             yield level, self.get_right_neighbor(level)
 
 
-class Graph(GraphAPI):
+class BaseGraph(GraphAPI):
     logger = logging.getLogger('alexandria.skip_graph.Graph')
 
-    nodes: Dict[Key, SGNodeAPI]
-
-    def __init__(self, initial_node: SGNodeAPI) -> None:
-        self.nodes = {initial_node.key: initial_node}
+    @abstractmethod
+    async def get_node(self, key: Key) -> SGNodeAPI:
+        ...
 
     async def insert(self, key: Key, current: SGNodeAPI) -> SGNodeAPI:
         self.logger.debug("Inserting: %d", key)
-        left_neighbor, right_neighbor = self._search_insert_point(key, current, current.max_level)
+        left_neighbor, found, right_neighbor = await self._search(key, current, current.max_level)
+        if found is not None:
+            raise AlreadyPresent(f"Key already present: {found}")
         self.logger.debug("Insertion point found: %s < %d < %s", left_neighbor, key, right_neighbor)
         node = SGNode(key=key)
-        return self._insert_at_level(node, left_neighbor, right_neighbor, 0)
+        return await self._insert_at_level(node, left_neighbor, right_neighbor, 0)
 
-    def get_node(self, key: Key) -> SGNodeAPI:
-        return self.nodes[key]
+    async def _get_left_neighbor(self, node: SGNodeAPI, level: int) -> Optional[SGNodeAPI]:
+        neighbor_key = node.get_left_neighbor(level)
+        if neighbor_key is None:
+            return None
+        else:
+            return await self.get_node(neighbor_key)
 
-    def _insert_at_level(self,
-                         node: SGNodeAPI,
-                         left: Optional[SGNodeAPI],
-                         right: Optional[SGNodeAPI],
-                         level: int) -> SGNodeAPI:
+    async def _get_right_neighbor(self, node: SGNodeAPI, level: int) -> Optional[SGNodeAPI]:
+        neighbor_key = node.get_right_neighbor(level)
+        if neighbor_key is None:
+            return None
+        else:
+            return await self.get_node(neighbor_key)
+
+    async def _insert_at_level(self,
+                               node: SGNodeAPI,
+                               left: Optional[SGNodeAPI],
+                               right: Optional[SGNodeAPI],
+                               level: int) -> SGNodeAPI:
         # Link the nodes on the current level
-        self._link_nodes(left, node, level)
-        self._link_nodes(node, right, level)
+        await self._link_nodes(left, node, level)
+        await self._link_nodes(node, right, level)
 
         self.logger.debug("Level-%d: (%s < %s < %s)", level, left, node, right)
 
@@ -158,28 +171,21 @@ class Graph(GraphAPI):
             # the other direction since it *might* link to something
             # else on the next level.  This suggests we need to avoid
             # populating the `null` levels and only have firm links.
-            next_left_key = left.get_left_neighbor(level)
-            if next_left_key is None:
-                left = None
-                break
-            else:
-                left = self.get_node(next_left_key)
+            left = await self._get_left_neighbor(left, level)
 
-        while right is not None and right.get_membership_at_level(level + 1) != node_membership:
-            next_right_key = right.get_right_neighbor(level)
-            if next_right_key is None:
-                right = None
-                break
-            else:
-                right = self.get_node(next_right_key)
+        if left is not None:
+            right = await self._get_right_neighbor(left, level + 1)
+        else:
+            while right is not None and right.get_membership_at_level(level + 1) != node_membership:
+                right = await self._get_right_neighbor(right, level)
 
-        return self._insert_at_level(node, left, right, level + 1)
+        return await self._insert_at_level(node, left, right, level + 1)
 
-    def _link_nodes(self,
-                    left: Optional[SGNodeAPI],
-                    right: Optional[SGNodeAPI],
-                    level: int,
-                    ) -> None:
+    async def _link_nodes(self,
+                          left: Optional[SGNodeAPI],
+                          right: Optional[SGNodeAPI],
+                          level: int,
+                          ) -> None:
         if left is None and right is None:
             raise Exception("Invariant")
         elif left is None:
@@ -190,43 +196,6 @@ class Graph(GraphAPI):
             left.set_right_neighbor(level, right.key)
             right.set_left_neighbor(level, left.key)
 
-    def _search_insert_point(self,
-                             key: Key,
-                             current: SGNodeAPI,
-                             level: int) -> Tuple[Optional[SGNodeAPI], Optional[SGNodeAPI]]:
-        if key == current.key:
-            raise AlreadyPresent
-        elif key > current.key:
-            for at_level, right_key in current.iter_down_right_levels(level):
-                if right_key is None:
-                    continue
-
-                if key >= right_key:
-                    right_neighbor = self.get_node(right_key)
-                    return self._search_insert_point(key, right_neighbor, at_level)
-            else:
-                right_neighbor_key = current.get_right_neighbor(0)
-                if right_neighbor_key is None:
-                    return current, None
-                right_neighbor = self.get_node(right_neighbor_key)
-                return current, right_neighbor
-        elif key < current.key:
-            for at_level, left_key in current.iter_down_left_levels(level):
-                if left_key is None:
-                    continue
-
-                if key <= left_key:
-                    left_neighbor = self.get_node(left_key)
-                    return self._search_insert_point(key, left_neighbor, at_level)
-            else:
-                left_neighbor_key = current.get_left_neighbor(0)
-                if left_neighbor_key is None:
-                    return None, current
-                left_neighbor = self.get_node(left_neighbor_key)
-                return left_neighbor, current
-        else:
-            raise Exception("Invariant")
-
     async def delete(self, key: Key, current: SGNodeAPI) -> None:
         self.logger.debug('Deleting: %d', key)
         node = await self.search(key, current)
@@ -235,49 +204,73 @@ class Graph(GraphAPI):
         right: Optional[SGNodeAPI]
 
         for level in range(node.max_level, -1, -1):
-            left_neighbor_key = node.get_left_neighbor(level)
-            if left_neighbor_key is None:
-                left = None
-            else:
-                left = self.get_node(left_neighbor_key)
+            left = await self._get_left_neighbor(node, level)
+            right = await self._get_right_neighbor(node, level)
 
-            right_neighbor_key = node.get_right_neighbor(level)
-            if right_neighbor_key is None:
-                right = None
-            else:
-                right = self.get_node(right_neighbor_key)
-
+            # Remove the node from the linked list at this level, directly linking it's neighbors
             if left is not None or right is not None:
-                self._link_nodes(left, right, level)
+                await self._link_nodes(left, right, level)
 
         self.nodes.pop(key)
 
-    async def search(self, key: Key, current: SGNodeAPI) -> None:
+    async def search(self, key: Key, current: SGNodeAPI) -> SGNodeAPI:
         self.logger.debug("Searching: %d", key)
-        return self._search(key, current, current.max_level)
+        left, node, right = await self._search(key, current, current.max_level)
+        if node is None:
+            raise NotFound(
+                f"Node not found for key={hex(key)}.  Closest neighbors were: {left} / {right}"
+            )
+        return node
 
-    def _search(self, key: Key, current: SGNodeAPI, level: int) -> SGNodeAPI:
+    async def find(self,
+                   key: Key,
+                   current: SGNodeAPI,
+                   ) -> FindResult:
+        return await self._search(key, current, current.max_level)
+
+    async def _search(self,
+                      key: Key,
+                      current: SGNodeAPI,
+                      level: int) -> FindResult:
         if key == current.key:
-            return current
+            return None, current, None
         elif key > current.key:
             for at_level, right_key in current.iter_down_right_levels(level):
                 if right_key is None:
                     continue
 
                 if key >= right_key:
-                    right_neighbor = self.get_node(right_key)
-                    return self._search(key, right_neighbor, at_level)
+                    right_neighbor = await self.get_node(right_key)
+                    return await self._search(key, right_neighbor, at_level)
             else:
-                raise NotFound
+                right_neighbor_key = current.get_right_neighbor(0)
+                if right_neighbor_key is None:
+                    return current, None, None
+                right_neighbor = await self.get_node(right_neighbor_key)
+                return current, None, right_neighbor
         elif key < current.key:
             for at_level, left_key in current.iter_down_left_levels(level):
                 if left_key is None:
                     continue
 
                 if key <= left_key:
-                    left_neighbor = self.get_node(left_key)
-                    return self._search(key, left_neighbor, at_level)
+                    left_neighbor = await self.get_node(left_key)
+                    return await self._search(key, left_neighbor, at_level)
             else:
-                raise NotFound
+                left_neighbor_key = current.get_left_neighbor(0)
+                if left_neighbor_key is None:
+                    return None, None, current
+                left_neighbor = await self.get_node(left_neighbor_key)
+                return left_neighbor, None, current
         else:
             raise Exception("Invariant")
+
+
+class LocalGraph(BaseGraph):
+    nodes: Dict[Key, SGNodeAPI]
+
+    def __init__(self, initial_node: SGNodeAPI) -> None:
+        self.nodes = {initial_node.key: initial_node}
+
+    async def get_node(self, key: Key) -> SGNodeAPI:
+        return self.nodes[key]
