@@ -628,7 +628,9 @@ class NetworkAPI(ABC):
         ...
 
     @abstractmethod
-    async def iterative_lookup(self, target_id: NodeID) -> Tuple[Node, ...]:
+    async def iterative_lookup(self,
+                               target_id: NodeID,
+                               filter_self: bool = True) -> Tuple[Node, ...]:
         ...
 
     @abstractmethod

@@ -128,6 +128,8 @@ class Client(Service, ClientAPI):
     # Send Mesasges: Routing
     #
     async def send_ping(self, node: Node) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Ping(request_id),
@@ -139,6 +141,8 @@ class Client(Service, ClientAPI):
         return request_id
 
     async def send_pong(self, node: Node, *, request_id: int) -> None:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         message = Message(
             Pong(request_id),
             node,
@@ -148,6 +152,8 @@ class Client(Service, ClientAPI):
         await self.events.sent_pong.trigger(message)
 
     async def send_find_nodes(self, node: Node, *, distance: int) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             FindNodes(request_id, distance),
@@ -163,6 +169,8 @@ class Client(Service, ClientAPI):
                                *,
                                request_id: int,
                                found_nodes: Collection[Node]) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         batches = tuple(partition_all(NODES_PER_PAYLOAD, found_nodes))
         self.logger.debug("Sending FoundNodes with %d nodes to %s", len(found_nodes), node)
         if batches:
@@ -192,6 +200,8 @@ class Client(Service, ClientAPI):
     # Send Messages: Content
     #
     async def send_advertise(self, node: Node, *, key: bytes, who: Node) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Advertise(request_id, key, who.to_payload()),
@@ -203,6 +213,8 @@ class Client(Service, ClientAPI):
         return request_id
 
     async def send_ack(self, node: Node, *, request_id: int) -> None:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         message = Message(
             Ack(request_id),
             node,
@@ -212,6 +224,8 @@ class Client(Service, ClientAPI):
         await self.events.sent_ack.trigger(message)
 
     async def send_locate(self, node: Node, *, key: bytes) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Locate(request_id, key),
@@ -227,6 +241,8 @@ class Client(Service, ClientAPI):
                              *,
                              request_id: int,
                              locations: Collection[Node]) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         batches = tuple(partition_all(NODES_PER_PAYLOAD, locations))
         self.logger.debug("Sending Locations with %d nodes to %s", len(locations), node)
         if batches:
@@ -256,6 +272,8 @@ class Client(Service, ClientAPI):
                             node: Node,
                             *,
                             key: bytes) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(
             Retrieve(request_id, key),
@@ -271,6 +289,8 @@ class Client(Service, ClientAPI):
                           *,
                           request_id: int,
                           data: bytes) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         if not data:
             response = Message(
                 Chunk(request_id, 1, 0, b''),
@@ -299,6 +319,8 @@ class Client(Service, ClientAPI):
     # Send Messages: Skip Graph
     #
     async def send_graph_get_introduction(self, node: Node) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(GraphGetIntroduction(request_id), node)
         self.logger.debug("Sending %s", message)
@@ -312,6 +334,8 @@ class Client(Service, ClientAPI):
                                       request_id: int,
                                       graph_nodes: Collection[SGNodeAPI],
                                       ) -> None:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         graph_nodes_payload = tuple(
             SkipGraphNode.from_sg_node(sg_node) for sg_node in graph_nodes
         )
@@ -322,6 +346,8 @@ class Client(Service, ClientAPI):
         await self.events.sent_graph_introduction.trigger(message)
 
     async def send_graph_get_node(self, node: Node, *, key: Key) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(GraphGetNode(request_id, int_to_big_endian(key)), node)
         self.logger.debug("Sending %s", message)
@@ -334,6 +360,8 @@ class Client(Service, ClientAPI):
                               *,
                               request_id: int,
                               sg_node: Optional[SGNodeAPI]) -> None:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         payload: Optional[SkipGraphNode]
         if sg_node is None:
             payload = None
@@ -350,6 +378,8 @@ class Client(Service, ClientAPI):
                                     left: Optional[Key],
                                     right: Optional[Key],
                                     level: int) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
 
         if left is None and right is None:
@@ -378,6 +408,8 @@ class Client(Service, ClientAPI):
         return request_id
 
     async def send_graph_linked(self, node: Node, *, request_id: int) -> None:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         message = Message(GraphLinked(request_id), node)
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
@@ -387,6 +419,8 @@ class Client(Service, ClientAPI):
     # Request/Response
     #
     async def ping(self, node: Node) -> MessageAPI[Pong]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Ping(request_id), node)
         async with self.message_dispatcher.subscribe_request(message, Pong) as subscription:
@@ -394,12 +428,16 @@ class Client(Service, ClientAPI):
             return await subscription.receive()
 
     async def find_nodes(self, node: Node, *, distance: int) -> Tuple[MessageAPI[FoundNodes], ...]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(FindNodes(request_id, distance), node)
         await self.events.sent_find_nodes.trigger(message)
         return await self._do_request_with_multi_response(message, FoundNodes)
 
     async def advertise(self, node: Node, *, key: bytes, who: Node) -> MessageAPI[Ack]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Advertise(request_id, key, who.to_payload()), node)
         async with self.message_dispatcher.subscribe_request(message, Ack) as subscription:
@@ -407,12 +445,16 @@ class Client(Service, ClientAPI):
             return await subscription.receive()
 
     async def locate(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Locations], ...]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Locate(request_id, key), node)
         await self.events.sent_locate.trigger(message)
         return await self._do_request_with_multi_response(message, Locations)
 
     async def retrieve(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Chunk], ...]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(Retrieve(request_id, key), node)
         responses = await self._do_request_with_multi_response(message, Chunk)
@@ -420,6 +462,8 @@ class Client(Service, ClientAPI):
         return tuple(sorted(responses, key=lambda response: response.payload.index))
 
     async def get_graph_introduction(self, node: Node) -> MessageAPI[GraphIntroduction]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(GraphGetIntroduction(request_id), node)
         async with self.message_dispatcher.subscribe_request(message, GraphIntroduction) as subscription:  # noqa: E501
@@ -427,6 +471,8 @@ class Client(Service, ClientAPI):
             return await subscription.receive()
 
     async def get_graph_node(self, node: Node, *, key: Key) -> MessageAPI[GraphNode]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(GraphGetNode(request_id, int_to_big_endian(key)), node)
         async with self.message_dispatcher.subscribe_request(message, GraphNode) as subscription:  # noqa: E501
@@ -440,6 +486,8 @@ class Client(Service, ClientAPI):
                                right: Optional[Key],
                                level: int,
                                ) -> MessageAPI[GraphLinked]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
         message = Message(GraphLinkNodes(
             request_id,

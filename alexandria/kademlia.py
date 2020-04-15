@@ -41,6 +41,7 @@ from alexandria.constants import (
     INSERT_TIMEOUT,
 )
 from alexandria.content_manager import ContentManager
+from alexandria.exceptions import ContentNotFound
 from alexandria.payloads import (
     FindNodes,
     Ping,
@@ -141,7 +142,39 @@ class Kademlia(Service, KademliaAPI):
         self.manager.run_daemon_task(self._handle_link_nodes_requests)
         self.manager.run_daemon_task(self._handle_get_graph_node_requests)
 
+        self.manager.run_daemon_task(self._monitor_graph)
+
         await self.manager.wait_finished()
+
+    async def _monitor_graph(self) -> None:
+        async for _ in every(60):
+            if isinstance(self.graph, LocalGraph):
+                self.logger.info("Graph not initialized yet, waiting...")
+                continue
+
+            graph_nodes = []
+            from alexandria.skip_graph import Missing
+            try:
+                async for node in self.graph.iter_items():
+                    graph_nodes.append(node)
+            except Missing:
+                did_error = True
+            else:
+                did_error = False
+
+            if len(graph_nodes):
+                far_left = graph_nodes[0]
+                far_right = graph_nodes[-1]
+            else:
+                far_left = None
+                far_right = None
+            self.logger.info(
+                "Graph traversal %s: found %d nodes: first=%s  last=%s",
+                'failed' if did_error else 'finished',
+                len(graph_nodes),
+                far_left,
+                far_right,
+            )
 
     async def _periodic_report_routing_table_status(self) -> None:
         async for _ in every(300, 10):  # noqa: F841
@@ -190,6 +223,10 @@ class Kademlia(Service, KademliaAPI):
         while self.manager.is_running:
             random_content_id = NodeID(secrets.randbits(256))
             candidates = await self.network.iterative_lookup(random_content_id)
+            if not candidates:
+                await trio.sleep(5)
+                continue
+
             for node in candidates:
                 try:
                     with trio.fail_after(INTRODUCTION_TIMEOUT):
@@ -204,19 +241,14 @@ class Kademlia(Service, KademliaAPI):
                     self.graph_db.set(sg_node.key, sg_node)
 
                 self.logger.info("Network SkipGraph initialized")
-                network_graph = NetworkGraph(self.graph_db, introduction_nodes[0], self.network)
-                break
+                return NetworkGraph(self.graph_db, introduction_nodes[0], self.network)
             else:
                 self.logger.debug(
                     f"Failed to initialize network Skip Graph after querying "
                     f"{len(candidates)} nodes."
                 )
-
-            break
         else:
             raise Exception("Failed to initialize network graph")
-
-        return network_graph
 
     async def _initialize_skip_graph(self) -> None:
         # 1. Get an introduction to the network's SkipGraph
@@ -239,7 +271,7 @@ class Kademlia(Service, KademliaAPI):
     async def _handle_introduction_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphGetIntroduction) as subscription:
             async for request in subscription:
-                self.logger.debug("handling request: %s", request)
+                self.logger.info("handling request: %s", request)
                 await self.client.send_graph_introduction(
                     request.node,
                     request_id=request.payload.request_id,
@@ -249,7 +281,7 @@ class Kademlia(Service, KademliaAPI):
     async def _handle_link_nodes_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
             async for request in subscription:
-                self.logger.debug("handling request: %s", request)
+                self.logger.info("handling request: %s", request)
                 # Acknowledge the request first, then do the linking.
                 await self.client.send_graph_linked(
                     request.node,
@@ -287,7 +319,7 @@ class Kademlia(Service, KademliaAPI):
     async def _handle_get_graph_node_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphGetNode) as subscription:
             async for request in subscription:
-                self.logger.debug("handling request: %s", request)
+                self.logger.info("handling request: %s", request)
                 # Acknowledge the request first, then do the linking.
                 key = content_key_to_graph_key(request.payload.key)
 
@@ -389,14 +421,12 @@ class Kademlia(Service, KademliaAPI):
                 await self.client.send_pong(request.node, request_id=request.payload.request_id)
 
     async def _do_initial_content_database_load(self) -> None:
-        def enqueue_all_content_keys() -> None:
-            self.logger.debug("Starting load of all content database into announce queue")
-            for key in tuple(self.content_manager.iter_content_keys()):
-                self.advertise_queue.enqueue(key, 0.0)
-                self.graph_queue.enqueue(content_key_to_graph_key(key), 0.0)
-            self.logger.debug("Finished load of all content database into announce queue")
-
-        await trio.to_thread.run_sync(enqueue_all_content_keys)
+        self.logger.info("Starting load of all content database into announce queue")
+        for key in tuple(self.content_manager.iter_content_keys()):
+            await trio.hazmat.checkpoint()
+            self.advertise_queue.enqueue(key, 0.0)
+            self.graph_queue.enqueue(content_key_to_graph_key(key), 0.0)
+        self.logger.info("Finished load of all content database into announce queue")
 
     async def _periodically_graph_content(self) -> None:
         semaphor = trio.Semaphore(
@@ -467,12 +497,21 @@ class Kademlia(Service, KademliaAPI):
         if self._check_interest_in_ephemeral_content(key):
             try:
                 with trio.fail_after(5):
-                    data = await self.network.retrieve(node, key=key)
-                    self.logger.debug(
-                        'Successfully retrieved content: %s@%s',
-                        encode_hex(key),
-                        node,
-                    )
+                    try:
+                        data = await self.network.retrieve(node, key=key)
+                    except ContentNotFound:
+                        self.logger.debug(
+                            'Content retrieval timed out: %s@%s',
+                            encode_hex(key),
+                            node,
+                        )
+                        data = None
+                    else:
+                        self.logger.debug(
+                            'Successfully retrieved content: %s@%s',
+                            encode_hex(key),
+                            node,
+                        )
             except trio.TooSlowError:
                 self.logger.debug(
                     'Content retrieval timed out: %s@%s',

@@ -203,7 +203,10 @@ class SessionInitiator(BaseSession):
                     type(packet),
                 )
         elif self.is_before_handshake:
-            raise NotImplementedError
+            # Likely that both nodes are handshaking with each other at the
+            # same time...  Put the message in the queue and see what happens.
+            # TODO: deal with buffer after handshake...
+            self._inbound_packet_buffer_channels[0].send_nowait(packet)
         elif self.is_during_handshake:
             if isinstance(packet, HandshakeResponse):
                 self._session_keys, ephemeral_public_key = await self.receive_handshake_response(

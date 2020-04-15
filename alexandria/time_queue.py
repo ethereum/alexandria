@@ -55,7 +55,8 @@ class TimeQueue(TimeQueueAPI[TKey]):
                     self._queue,
                     QueueItem(key, current_queue_at),
                 )
-                current_queue_item = self._queue.pop(current_queue_index)
+                current_queue_item = self._queue[current_queue_index]
+                self._queue.remove(current_queue_item)
                 if current_queue_item.key != key:
                     raise Exception("Invariant")
 

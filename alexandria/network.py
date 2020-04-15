@@ -94,7 +94,10 @@ class Network(NetworkAPI):
             for node_as_payload in message.payload.nodes
         )
 
-    async def iterative_lookup(self, target_id: NodeID) -> Tuple[Node, ...]:
+    async def iterative_lookup(self,
+                               target_id: NodeID,
+                               filter_self: bool = True,
+                               ) -> Tuple[Node, ...]:
         self.logger.debug("Starting looking up @ %s", humanize_node_id(target_id))
 
         # tracks the nodes that have already been queried
@@ -179,6 +182,7 @@ class Network(NetworkAPI):
             Node(node_id, endpoint)
             for node_id, endpoints in received_nodes.items()
             for endpoint in endpoints
+            if (not filter_self or node_id != self.client.local_node_id)
         )
         sorted_found_nodes = tuple(sorted(
             found_nodes,
@@ -208,8 +212,6 @@ class Network(NetworkAPI):
         for batch in partition_all(KADEMLIA_ANNOUNCE_CONCURRENCY, found_nodes):
             async with trio.open_nursery() as nursery:
                 for node in batch:
-                    if node.node_id == self.client.local_node_id:
-                        continue
                     nursery.start_soon(do_advertise, node)
         self.logger.debug(
             "Finished announce to %d peers for: %s",
@@ -265,7 +267,10 @@ class Network(NetworkAPI):
 
     async def get_graph_node(self, node: Node, *, key: Key) -> SGNodeAPI:
         response = await self.client.get_graph_node(node, key=key)
-        return response.payload.node.to_sg_node()
+        if response.payload.node is None:
+            raise NotFound(f"Didn't find node for key: {hex(key)}")
+        else:
+            return response.payload.node.to_sg_node()
 
     async def get_node(self, key: Key) -> SGNodeAPI:
         content_key = graph_key_to_content_key(key)
