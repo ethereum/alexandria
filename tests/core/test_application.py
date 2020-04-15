@@ -36,7 +36,7 @@ def make_local_content():
         yield key, value
 
 
-@pytest.mark.skip('integration testing')
+#@pytest.mark.skip('integration testing')
 @pytest.mark.trio
 async def test_application(bootnode):
     bootnodes = (Node(bootnode.client.local_node_id, bootnode.client.listen_on),)

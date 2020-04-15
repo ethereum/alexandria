@@ -24,7 +24,7 @@ class ByteList(sedes.List):  # type: ignore
 byte_list = ByteList(2**32)
 
 
-class Maybe(sedes.BaseSedes[TSerializable, TDeserialized]):
+class Maybe(sedes.BaseSedes[TSerializable, TDeserialized]):  # type: ignore
     is_fixed_sized = False
 
     def __init__(self, element_sedes: TSedes) -> None:
@@ -46,7 +46,7 @@ class Maybe(sedes.BaseSedes[TSerializable, TDeserialized]):
         if value is None:
             return b'\x00'
         else:
-            return b'\x01' + self.element_sedes.serialize(value)
+            return b'\x01' + self.element_sedes.serialize(value)  # type: ignore
 
     def deserialize(self, data: bytes) -> Optional[TDeserialized]:
         try:
@@ -66,17 +66,13 @@ class Maybe(sedes.BaseSedes[TSerializable, TDeserialized]):
     #
     def get_hash_tree_root(self, value: TSerializable) -> Hash32:
         serialized_value = self.serialize(value)
-        return merkleize(pack((serialized_value,)))
+        return merkleize(pack((serialized_value,)))  # type: ignore
 
     def get_hash_tree_root_and_leaves(
         self, value: TSerializable, cache: CacheObj
     ) -> Tuple[Hash32, CacheObj]:
         serialized_value = self.serialize(value)
-        return merkleize_with_cache(pack((serialized_value,)), cache=cache)
+        return merkleize_with_cache(pack((serialized_value,)), cache=cache)  # type: ignore
 
     def get_key(self, value: Any) -> str:
-        return get_key(self, value)
-
-
-class maybe(Maybe[Any, Any]):
-    pass
+        return get_key(self, value)  # type: ignore

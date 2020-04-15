@@ -8,7 +8,7 @@ from eth_utils import to_tuple, encode_hex
 from eth_utils.toolz import take, partition_all
 import trio
 
-from alexandria._utils import humanize_node_id, content_key_to_node_id
+from alexandria._utils import humanize_node_id, content_key_to_node_id, graph_key_to_content_key
 from alexandria.abc import (
     ClientAPI,
     Endpoint,
@@ -25,6 +25,7 @@ from alexandria.constants import (
     PING_TIMEOUT,
     LINK_TIMEOUT,
 )
+from alexandria.exceptions import ContentNotFound
 from alexandria.routing_table import compute_log_distance, compute_distance
 from alexandria.skip_graph import NotFound
 from alexandria.typing import Key, NodeID
@@ -229,7 +230,29 @@ class Network(NetworkAPI):
         data = b''.join((
             message.payload.data for message in chunks
         ))
+        if not data:
+            raise ContentNotFound(f"Node returned empty data for key: {encode_hex(key)}")
         return data
+
+    async def get_content(self, key: bytes) -> bytes:
+        content_id = content_key_to_node_id(key)
+        nodes_near_content = await self.iterative_lookup(content_id)
+        queried: Set[NodeID] = set()
+
+        for node in nodes_near_content:
+            for location in await self.locate(node, key=key):
+                if location.node_id in queried:
+                    continue
+                queried.add(location.node_id)
+                try:
+                    return await self.retrieve(node, key=key)
+                except ContentNotFound:
+                    continue
+        else:
+            raise NotFound(
+                f"Could not find node after querying {len(queried)} "
+                f"locations provided by {len(nodes_near_content)} nodes"
+            )
 
     #
     # Graph Management
@@ -240,19 +263,24 @@ class Network(NetworkAPI):
             node.to_sg_node() for node in response.payload.nodes
         )
 
+    async def get_graph_node(self, node: Node, *, key: Key) -> SGNodeAPI:
+        response = await self.client.get_graph_node(node, key=key)
+        return response.payload.node.to_sg_node()
+
     async def get_node(self, key: Key) -> SGNodeAPI:
-        content_id = content_key_to_node_id(key)
+        content_key = graph_key_to_content_key(key)
+        content_id = content_key_to_node_id(content_key)
         nodes_near_content = await self.iterative_lookup(content_id)
         queried: Set[NodeID] = set()
 
         # TODO: these lookups can happen concurrently....
         for node in nodes_near_content:
-            for location in await self.locate(node, key=key):
+            for location in await self.locate(node, key=content_key):
                 if location.node_id in queried:
                     continue
                 queried.add(location.node_id)
                 try:
-                    return await self.get_node(node, key)
+                    return await self.get_graph_node(node, key=key)
                 except NotFound:
                     continue
         else:
@@ -270,9 +298,9 @@ class Network(NetworkAPI):
 
         updated: Set[NodeID] = set()
 
-        async def do_link(location: Node):
+        async def do_link(location: Node) -> None:
             with trio.move_on_after(LINK_TIMEOUT):
-                await self.client.link_graph_nodes(
+                await self.client.send_graph_link_nodes(
                     location,
                     left=left,
                     right=right,
@@ -283,14 +311,17 @@ class Network(NetworkAPI):
             for key in (left, right):
                 if key is None:
                     continue
-                content_id = content_key_to_node_id(key)
+                content_key = graph_key_to_content_key(key)
+                content_id = content_key_to_node_id(content_key)
                 for node in await self.iterative_lookup(content_id):
-                    for location in await self.locate(node, key=key):
+                    nursery.start_soon(do_link, node)
+
+                    content_locations = await self.locate(node, key=content_key)
+                    for location in content_locations:
                         if location.node_id in updated:
                             continue
-                    updated.add(location.node_id)
-                    # TODO: concurrency and timeout
-                    nursery.start_soon(do_link, location)
+                        updated.add(location.node_id)
+                        nursery.start_soon(do_link, location)
 
 
 def iter_closest_nodes(target: NodeID,

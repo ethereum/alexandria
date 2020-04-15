@@ -13,7 +13,7 @@ import trio
 
 from async_service import Service
 
-from alexandria._utils import node_id_to_hex
+from alexandria._utils import node_id_to_hex, content_key_to_graph_key
 from alexandria.abc import (
     ClientAPI,
     ContentBundle,
@@ -409,5 +409,6 @@ class RPCServer(Service):
         else:
             self.kademlia.content_manager.durable_db.set(key, data)
             self.kademlia.content_manager.rebuild_durable_index()
-        self.kademlia.advertise_tracker.enqueue(key, last_advertised_at=0.0)
+        self.kademlia.advertise_queue.enqueue(key, queue_at=0.0)
+        self.kademlia.graph_queue.enqueue(content_key_to_graph_key(key), queue_at=0.0)
         return generate_response(request, (), None)

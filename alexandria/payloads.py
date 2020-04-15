@@ -1,9 +1,9 @@
-from typing import Tuple, TYPE_CHECKING
+from typing import Optional, Tuple, TYPE_CHECKING
 
-from eth_utils import big_endian_to_int, int_to_big_endian
 from ssz import sedes
 
-from alexandria.sedes import byte_list, maybe
+from alexandria._utils import content_key_to_graph_key, graph_key_to_content_key
+from alexandria.sedes import byte_list, Maybe
 from alexandria.typing import NodeID
 
 if TYPE_CHECKING:
@@ -142,24 +142,32 @@ class SkipGraphNode(sedes.Serializable):  # type: ignore
         ("neighbors_right", sedes.List(byte_list, max_length=2**32)),
     )
 
+    key: bytes
+    neighbors_left: Tuple[bytes, ...]
+    neighbors_right: Tuple[bytes, ...]
+
     @classmethod
     def from_sg_node(cls, sg_node: 'SGNodeAPI') -> 'SkipGraphNode':
         return cls(
-            key=int_to_big_endian(sg_node.key),
+            key=graph_key_to_content_key(sg_node.key),
             neighbors_left=tuple(
-                int_to_big_endian(neighbor) for neighbor in sg_node.neighbors_left
+                graph_key_to_content_key(neighbor) for neighbor in sg_node.neighbors_left
             ),
             neighbors_right=tuple(
-                int_to_big_endian(neighbor) for neighbor in sg_node.neighbors_right
+                graph_key_to_content_key(neighbor) for neighbor in sg_node.neighbors_right
             ),
         )
 
     def to_sg_node(self) -> 'SGNodeAPI':
         from alexandria.skip_graph import SGNode
         return SGNode(
-            key=big_endian_to_int(self.key),
-            neighbors_left=tuple(big_endian_to_int(neighbor) for neighbor in self.neighbors_left),
-            neighbors_right=tuple(big_endian_to_int(neighbor) for neighbor in self.neighbors_right),
+            key=content_key_to_graph_key(self.key),
+            neighbors_left=tuple(
+                content_key_to_graph_key(neighbor) for neighbor in self.neighbors_left
+            ),
+            neighbors_right=tuple(
+                content_key_to_graph_key(neighbor) for neighbor in self.neighbors_right
+            ),
         )
 
 
@@ -168,12 +176,17 @@ class GraphGetIntroduction(sedes.Serializable):  # type: ignore
         ("request_id", sedes.uint16),
     )
 
+    request_id: int
+
 
 class GraphIntroduction(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
         ("nodes", sedes.List(SkipGraphNode, max_length=2**32)),
     )
+
+    request_id: int
+    nodes: Tuple[SkipGraphNode, ...]
 
 
 class GraphGetNode(sedes.Serializable):  # type: ignore
@@ -182,24 +195,37 @@ class GraphGetNode(sedes.Serializable):  # type: ignore
         ("key", byte_list),
     )
 
+    request_id: int
+    key: bytes
+
 
 class GraphNode(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
-        ("node", maybe(SkipGraphNode)),
+        ("node", Maybe(SkipGraphNode)),
     )
+
+    request_id: int
+    node: SkipGraphNode
 
 
 class GraphLinkNodes(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
-        ("left", maybe(byte_list)),
-        ("right", maybe(byte_list)),
+        ("left", Maybe(byte_list)),
+        ("right", Maybe(byte_list)),
         ("level", sedes.uint8),
     )
+
+    request_id: int
+    left: Optional[bytes]
+    right: Optional[bytes]
+    level: int
 
 
 class GraphLinked(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
     )
+
+    request_id: int

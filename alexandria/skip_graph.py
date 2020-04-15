@@ -7,7 +7,7 @@ from eth_utils import int_to_big_endian, ValidationError
 import trio
 
 from alexandria._utils import content_key_to_node_id
-from alexandria.abc import SGNodeAPI, GraphAPI, FindResult, NetworkAPI
+from alexandria.abc import SGNodeAPI, GraphAPI, GraphDatabaseAPI, FindResult, NetworkAPI
 from alexandria.typing import Key
 
 
@@ -62,7 +62,7 @@ class SGNode(SGNodeAPI):
         )
 
     def get_membership_at_level(self, at_level: int) -> int:
-        return self.membership_vector & (2**at_level - 1)
+        return self.membership_vector & (2**at_level - 1)  # type: ignore
 
     def get_right_neighbor(self, at_level: int) -> Optional[Key]:
         try:
@@ -129,7 +129,7 @@ class SGNode(SGNodeAPI):
             yield level, self.get_right_neighbor(level)
 
 
-class GraphDB:
+class GraphDB(GraphDatabaseAPI):
     _db: Dict[Key, SGNodeAPI]
 
     def __init__(self) -> None:
@@ -153,7 +153,6 @@ class GraphDB:
 
 class BaseGraph(GraphAPI):
     logger = logging.getLogger('alexandria.skip_graph.Graph')
-    db: GraphDB
 
     @abstractmethod
     async def get_node(self, key: Key) -> SGNodeAPI:
@@ -166,7 +165,7 @@ class BaseGraph(GraphAPI):
                          level: int) -> None:
         ...
 
-    async def insert(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
+    async def insert(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> SGNodeAPI:
         if cursor is None:
             cursor = self.cursor
         self.logger.debug("Inserting: %d", key)
@@ -197,8 +196,8 @@ class BaseGraph(GraphAPI):
                                right: Optional[SGNodeAPI],
                                level: int) -> SGNodeAPI:
         # Link the nodes on the cursor level
-        await self._link_nodes(left, node, level)
-        await self._link_nodes(node, right, level)
+        await self.link_nodes(left, node, level)
+        await self.link_nodes(node, right, level)
 
         self.logger.debug("Level-%d: (%s < %s < %s)", level, left, node, right)
 
@@ -233,22 +232,7 @@ class BaseGraph(GraphAPI):
 
         return await self._insert_at_level(node, left, right, level + 1)
 
-    async def _link_nodes(self,
-                          left: Optional[SGNodeAPI],
-                          right: Optional[SGNodeAPI],
-                          level: int,
-                          ) -> None:
-        if left is None and right is None:
-            raise Exception("Invariant")
-        elif left is None:
-            right.set_left_neighbor(level, None)
-        elif right is None:
-            left.set_right_neighbor(level, None)
-        else:
-            left.set_right_neighbor(level, right.key)
-            right.set_left_neighbor(level, left.key)
-
-    async def delete(self, key: Key, cursor: Optional[SGNodeAPI]) -> None:
+    async def delete(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> None:
         if cursor is None:
             cursor = self.cursor
         self.logger.debug('Deleting: %d', key)
@@ -256,9 +240,9 @@ class BaseGraph(GraphAPI):
 
         if key == self.cursor.key:
             if node.get_right_neighbor(0) is not None:
-                self.cursor = await self._get_right_neighbor(node, 0)
+                self.cursor = await self._get_right_neighbor(node, 0)  # type: ignore
             elif node.get_left_neighbor(0) is not None:
-                self.cursor = await self._get_left_neighbor(node, 0)
+                self.cursor = await self._get_left_neighbor(node, 0)  # type: ignore
             else:
                 raise Exception("Attempt to delete last remaining tree node")
 
@@ -271,11 +255,11 @@ class BaseGraph(GraphAPI):
 
             # Remove the node from the linked list at this level, directly linking it's neighbors
             if left is not None or right is not None:
-                await self._link_nodes(left, right, level)
+                await self.link_nodes(left, right, level)
 
         self.db.delete(key)
 
-    async def search(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
+    async def search(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> SGNodeAPI:
         if cursor is None:
             cursor = self.cursor
         self.logger.debug("Searching: %d", key)
@@ -288,7 +272,7 @@ class BaseGraph(GraphAPI):
 
     async def find(self,
                    key: Key,
-                   cursor: Optional[SGNodeAPI],
+                   cursor: Optional[SGNodeAPI] = None,
                    ) -> FindResult:
         if cursor is None:
             cursor = self.cursor
@@ -331,26 +315,40 @@ class BaseGraph(GraphAPI):
         else:
             raise Exception("Invariant")
 
-    async def iter(self,
-                   start: Optional[Key] = None,
-                   end: Optional[Key] = None,
-                   level: int = 0) -> AsyncIterator[Key]:
-        if start is None:
-            left, node, right = await self.find(0)
-            if node is not None:
-                cursor = node
-            elif left is not None:
-                cursor = left
-            else:
-                raise Exception("Invariant")
+    async def iter_keys(self,
+                        start: Key = Key(0),
+                        end: Optional[Key] = None) -> AsyncIterator[Key]:
+        async for node in self.iter_values(start, end):
+            yield node.key
+
+    async def iter_values(self,
+                          start: Key = Key(0),
+                          end: Optional[Key] = None) -> AsyncIterator[SGNodeAPI]:
+        cursor: Optional[SGNodeAPI]
+        if end is not None and end < start:
+            raise TypeError("End must be greater than start")
+
+        left, node, right = await self.find(start)
+        if node is not None:
+            cursor = node
+        elif left is not None:
+            cursor = right
         else:
-            cursor = start
+            raise Exception("Invariant")
 
         while cursor is not None:
+            if end is not None and cursor.key >= end:
+                break
             await trio.hazmat.checkpoint()
             yield cursor
 
-            cursor = self._get_right_neighbor(cursor, level)
+            cursor = await self._get_right_neighbor(cursor, 0)
+
+    async def iter_items(self,
+                         start: Key = Key(0),
+                         end: Optional[Key] = None) -> AsyncIterator[Tuple[Key, SGNodeAPI]]:
+        async for node in self.iter_values(start, end):
+            yield node.key, node
 
 
 def _link_local_nodes(left: Optional[SGNodeAPI],
@@ -359,13 +357,15 @@ def _link_local_nodes(left: Optional[SGNodeAPI],
                       ) -> None:
     if left is None and right is None:
         raise Exception("Invariant")
-    elif left is None:
+    elif left is None and right is not None:
         right.set_left_neighbor(level, None)
-    elif right is None:
+    elif right is None and left is not None:
         left.set_right_neighbor(level, None)
-    else:
+    elif left is not None and right is not None:
         left.set_right_neighbor(level, right.key)
         right.set_left_neighbor(level, left.key)
+    else:
+        raise Exception("Invariant")
 
 
 class LocalGraph(BaseGraph):
@@ -376,7 +376,7 @@ class LocalGraph(BaseGraph):
 
     async def get_node(self, key: Key) -> SGNodeAPI:
         try:
-            return self.node_db.get(key)
+            return self.db.get(key)
         except KeyError as err:
             raise Missing from err
 
@@ -389,7 +389,7 @@ class LocalGraph(BaseGraph):
 
 class NetworkGraph(BaseGraph):
     def __init__(self,
-                 db: GraphDB,
+                 db: GraphDatabaseAPI,
                  cursor: SGNodeAPI,
                  network: NetworkAPI) -> None:
         self.db = db
@@ -403,7 +403,7 @@ class NetworkGraph(BaseGraph):
             return self.db.get(key)
         except KeyError:
             try:
-                return await self.network.get_node(key)
+                return await self._network.get_node(key)
             except NotFound as err:
                 raise Missing from err
 
@@ -412,4 +412,6 @@ class NetworkGraph(BaseGraph):
                          right: Optional[SGNodeAPI],
                          level: int) -> None:
         _link_local_nodes(left, right, level)
-        await self.network.link_nodes(left, right, level)
+        left_key = left if left is None else left.key
+        right_key = right if right is None else right.key
+        await self._network.link_nodes(left_key, right_key, level)

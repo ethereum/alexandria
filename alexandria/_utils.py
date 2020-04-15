@@ -7,12 +7,20 @@ from eth_keys import keys
 from eth_typing import Hash32
 import trio
 
-from eth_utils import encode_hex, humanize_hash, to_tuple
-from alexandria.typing import NodeID
+from eth_utils import encode_hex, humanize_hash, to_tuple, int_to_big_endian, big_endian_to_int
+from alexandria.typing import Key, NodeID
 
 
 def node_id_to_hex(node_id: NodeID) -> str:
     return encode_hex(node_id.to_bytes(32, 'big'))
+
+
+def content_key_to_graph_key(key: bytes) -> Key:
+    return Key(big_endian_to_int(key))
+
+
+def graph_key_to_content_key(key: Key) -> bytes:
+    return int_to_big_endian(key)
 
 
 def humanize_node_id(node_id: NodeID) -> str:

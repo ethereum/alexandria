@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import ipaddress
 from typing import (
     AsyncContextManager,
+    AsyncIterator,
     Collection,
     Deque,
     Dict,
@@ -35,6 +36,9 @@ from alexandria.payloads import (
     FindNodes, FoundNodes,
     Locate, Locations,
     Ping, Pong,
+    GraphGetIntroduction, GraphIntroduction,
+    GraphGetNode, GraphNode,
+    GraphLinkNodes, GraphLinked,
 )
 from alexandria.typing import Key, AES128Key, NodeID, Tag
 
@@ -315,6 +319,15 @@ class EventsAPI(ABC):
     sent_retrieve: EventAPI[MessageAPI[Retrieve]]
     sent_chunk: EventAPI[MessageAPI[Chunk]]
 
+    sent_graph_get_introduction: EventAPI[MessageAPI[GraphGetIntroduction]]
+    sent_graph_introduction: EventAPI[MessageAPI[GraphIntroduction]]
+
+    sent_graph_get_node: EventAPI[MessageAPI[GraphGetNode]]
+    sent_graph_node: EventAPI[MessageAPI[GraphNode]]
+
+    sent_graph_link_nodes: EventAPI[MessageAPI[GraphLinkNodes]]
+    sent_graph_linked: EventAPI[MessageAPI[GraphLinked]]
+
 
 class MessageDispatcherAPI(ServiceAPI):
     #
@@ -345,6 +358,46 @@ class MessageDispatcherAPI(ServiceAPI):
                           message: MessageAPI[sedes.Serializable],
                           response_payload_type: Type[TPayload],
                           ) -> AsyncContextManager[trio.abc.ReceiveChannel[MessageAPI[TPayload]]]:
+        ...
+
+
+class SGNodeAPI(ABC):
+    key: Key
+    neighbors_left: List[Key]
+    neighbors_right: List[Key]
+    membership_vector: NodeID
+
+    @property
+    @abstractmethod
+    def max_level(self) -> int:
+        ...
+
+    @abstractmethod
+    def get_membership_at_level(self, at_level: int) -> int:
+        ...
+
+    @abstractmethod
+    def get_right_neighbor(self, at_level: int) -> Optional[Key]:
+        ...
+
+    @abstractmethod
+    def get_left_neighbor(self, at_level: int) -> Optional[Key]:
+        ...
+
+    @abstractmethod
+    def set_left_neighbor(self, at_level: int, key: Optional[Key]) -> None:
+        ...
+
+    @abstractmethod
+    def set_right_neighbor(self, at_level: int, key: Optional[Key]) -> None:
+        ...
+
+    @abstractmethod
+    def iter_down_left_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
+        ...
+
+    @abstractmethod
+    def iter_down_right_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
         ...
 
 
@@ -425,6 +478,44 @@ class ClientAPI(ServiceAPI):
                           data: bytes) -> int:
         ...
 
+    @abstractmethod
+    async def send_graph_get_introduction(self, node: Node) -> int:
+        ...
+
+    @abstractmethod
+    async def send_graph_introduction(self,
+                                      node: Node,
+                                      *,
+                                      request_id: int,
+                                      graph_nodes: Collection[SGNodeAPI],
+                                      ) -> None:
+        ...
+
+    @abstractmethod
+    async def send_graph_get_node(self, node: Node, *, key: Key) -> int:
+        ...
+
+    @abstractmethod
+    async def send_graph_node(self,
+                              node: Node,
+                              *,
+                              request_id: int,
+                              sg_node: Optional[SGNodeAPI]) -> None:
+        ...
+
+    @abstractmethod
+    async def send_graph_link_nodes(self,
+                                    node: Node,
+                                    *,
+                                    left: Optional[Key],
+                                    right: Optional[Key],
+                                    level: int) -> int:
+        ...
+
+    @abstractmethod
+    async def send_graph_linked(self, node: Node, *, request_id: int) -> None:
+        ...
+
     #
     # Request/Response
     #
@@ -446,6 +537,24 @@ class ClientAPI(ServiceAPI):
 
     @abstractmethod
     async def retrieve(self, node: Node, *, key: bytes) -> Tuple[MessageAPI[Chunk], ...]:
+        ...
+
+    @abstractmethod
+    async def get_graph_introduction(self, node: Node) -> MessageAPI[GraphIntroduction]:
+        ...
+
+    @abstractmethod
+    async def get_graph_node(self, node: Node, *, key: Key) -> MessageAPI[GraphNode]:
+        ...
+
+    @abstractmethod
+    async def link_graph_nodes(self,
+                               node: Node,
+                               *,
+                               left: Optional[Key],
+                               right: Optional[Key],
+                               level: int,
+                               ) -> MessageAPI[GraphLinked]:
         ...
 
 
@@ -513,46 +622,6 @@ class RoutingTableAPI(Collection[NodeID]):
         ...
 
 
-class SGNodeAPI(ABC):
-    key: Key
-    neighbors_left: List[Key]
-    neighbors_right: List[Key]
-    membership_vector: NodeID
-
-    @property
-    @abstractmethod
-    def max_level(self) -> int:
-        ...
-
-    @abstractmethod
-    def get_membership_at_level(self, at_level: int) -> int:
-        ...
-
-    @abstractmethod
-    def get_right_neighbor(self, at_level: int) -> Optional[Key]:
-        ...
-
-    @abstractmethod
-    def get_left_neighbor(self, at_level: int) -> Optional[Key]:
-        ...
-
-    @abstractmethod
-    def set_left_neighbor(self, at_level: int, key: Optional[Key]) -> None:
-        ...
-
-    @abstractmethod
-    def set_right_neighbor(self, at_level: int, key: Optional[Key]) -> None:
-        ...
-
-    @abstractmethod
-    def iter_down_left_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
-        ...
-
-    @abstractmethod
-    def iter_down_right_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
-        ...
-
-
 class NetworkAPI(ABC):
     @abstractmethod
     async def single_lookup(self, node: Node, *, distance: int) -> Tuple[Node, ...]:
@@ -583,17 +652,23 @@ class NetworkAPI(ABC):
         ...
 
     @abstractmethod
+    async def get_content(self, key: bytes) -> bytes:
+        ...
+
+    @abstractmethod
     async def get_introduction(self, node: Node) -> Tuple[SGNodeAPI, ...]:
         ...
 
     @abstractmethod
-    async def get_node(self, node: Node, *, key: Key) -> Tuple[SGNodeAPI, ...]:
+    async def get_graph_node(self, node: Node, *, key: Key) -> SGNodeAPI:
+        ...
+
+    @abstractmethod
+    async def get_node(self, key: Key) -> SGNodeAPI:
         ...
 
     @abstractmethod
     async def link_nodes(self,
-                         node: Node,
-                         *,
                          left: Optional[Key],
                          right: Optional[Key],
                          level: int) -> None:
@@ -638,7 +713,11 @@ class DurableDatabaseAPI(Sized):
         ...
 
 
-class ContentDatabaseAPI(Sized):
+TKey = TypeVar('TKey')
+TValue = TypeVar('TValue')
+
+
+class LimitedCapacityDatabaseAPI(Sized, Generic[TKey, TValue]):
     total_capacity: int
     capacity: int
 
@@ -648,23 +727,23 @@ class ContentDatabaseAPI(Sized):
         ...
 
     @abstractmethod
-    def keys(self) -> KeysView[bytes]:
+    def keys(self) -> KeysView[TKey]:
         ...
 
     @abstractmethod
-    def has(self, key: bytes) -> bool:
+    def has(self, key: TKey) -> bool:
         ...
 
     @abstractmethod
-    def get(self, key: bytes) -> bytes:
+    def get(self, key: TKey) -> TValue:
         ...
 
     @abstractmethod
-    def set(self, content: Content) -> None:
+    def set(self, key: TKey, value: TValue) -> None:
         ...
 
     @abstractmethod
-    def delete(self, key: bytes) -> None:
+    def delete(self, key: TKey) -> None:
         ...
 
 
@@ -674,6 +753,9 @@ class ContentIndexAPI(Sized):
 
     @abstractmethod
     def get_index(self, key: NodeID) -> Tuple[NodeID, ...]:
+        ...
+
+    def has(self, key: NodeID) -> bool:
         ...
 
     @abstractmethod
@@ -699,16 +781,30 @@ class ContentStats(NamedTuple):
     cache_index_capacity: int
 
 
+class TimeQueueAPI(Generic[TKey]):
+    @abstractmethod
+    def enqueue(self, key: TKey, queue_at: float = None) -> None:
+        ...
+
+    @abstractmethod
+    def get_wait_time(self) -> float:
+        ...
+
+    @abstractmethod
+    async def pop_next(self) -> TKey:
+        ...
+
+
 class ContentManagerAPI(ABC):
     center_id: NodeID
 
     durable_db: DurableDatabaseAPI
     durable_index: Mapping[NodeID, Tuple[NodeID, ...]]
 
-    ephemeral_db: ContentDatabaseAPI
+    ephemeral_db: LimitedCapacityDatabaseAPI[bytes, bytes]
     ephemeral_index: ContentIndexAPI
 
-    cache_db: ContentDatabaseAPI
+    cache_db: LimitedCapacityDatabaseAPI[bytes, bytes]
     cache_index: ContentIndexAPI
 
     @abstractmethod
@@ -721,6 +817,14 @@ class ContentManagerAPI(ABC):
 
     @abstractmethod
     def ingest_content(self, content: ContentBundle) -> None:
+        ...
+
+    @abstractmethod
+    def has_key(self, key: bytes) -> bool:
+        ...
+
+    @abstractmethod
+    def has_data(self, key: bytes) -> bool:
         ...
 
     @abstractmethod
@@ -770,27 +874,40 @@ FindResult = Union[
 
 class GraphAPI(ABC):
     cursor: SGNodeAPI
+    db: GraphDatabaseAPI
 
     @abstractmethod
-    async def insert(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
+    async def insert(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> SGNodeAPI:
         ...
 
     @abstractmethod
-    async def delete(self, key: Key, cursor: Optional[SGNodeAPI]) -> None:
+    async def delete(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> None:
         ...
 
     @abstractmethod
-    async def find(self, key: Key, cursor: Optional[SGNodeAPI]) -> FindResult:
+    async def find(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> FindResult:
         ...
 
     @abstractmethod
-    async def search(self, key: Key, cursor: Optional[SGNodeAPI]) -> SGNodeAPI:
+    async def search(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> SGNodeAPI:
         ...
 
     @abstractmethod
-    async def iter_keys(self,
-                        start: Optional[Key] = None,
-                        end: Optional[Key] = None) -> Iterator[Key]:
+    def iter_keys(self,
+                  start: Key = Key(0),
+                  end: Optional[Key] = None) -> AsyncIterator[Key]:
+        ...
+
+    @abstractmethod
+    def iter_values(self,
+                    start: Key = Key(0),
+                    end: Optional[Key] = None) -> AsyncIterator[SGNodeAPI]:
+        ...
+
+    @abstractmethod
+    def iter_items(self,
+                   start: Key = Key(0),
+                   end: Optional[Key] = None) -> AsyncIterator[Tuple[Key, SGNodeAPI]]:
         ...
 
 
@@ -800,4 +917,10 @@ class KademliaAPI(ServiceAPI):
     routing_table: RoutingTableAPI
     content_manager: ContentManagerAPI
     graph_db: GraphDatabaseAPI
-    graph: GraphAPI
+    advertise_queue: TimeQueueAPI[bytes]
+    graph_queue: TimeQueueAPI[Key]
+
+    @property
+    @abstractmethod
+    def graph(self) -> GraphAPI:
+        ...

@@ -3,10 +3,21 @@ import secrets
 from typing import Iterable, Optional, Tuple
 
 from async_service import Service
-from eth_utils import encode_hex, to_tuple, big_endian_to_int, ValidationError
+from eth_utils import (
+    encode_hex,
+    to_tuple,
+    ValidationError,
+    to_hex,
+)
 import trio
 
-from alexandria._utils import every, humanize_node_id, content_key_to_node_id
+from alexandria._utils import (
+    every,
+    humanize_node_id,
+    content_key_to_node_id,
+    content_key_to_graph_key,
+    graph_key_to_content_key,
+)
 from alexandria.abc import (
     ClientAPI,
     ContentBundle,
@@ -18,6 +29,7 @@ from alexandria.abc import (
     NetworkAPI,
     Node,
     RoutingTableAPI,
+    SGNodeAPI,
 )
 from alexandria.config import KademliaConfig
 from alexandria.constants import (
@@ -28,7 +40,7 @@ from alexandria.constants import (
     INTRODUCTION_TIMEOUT,
     INSERT_TIMEOUT,
 )
-from alexandria.content_manager import AdvertiseTracker, ContentManager
+from alexandria.content_manager import ContentManager
 from alexandria.payloads import (
     FindNodes,
     Ping,
@@ -46,9 +58,9 @@ from alexandria.skip_graph import (
     LocalGraph,
     SGNode,
     AlreadyPresent,
-    NotFound,
 )
-from alexandria.typing import NodeID
+from alexandria.time_queue import TimeQueue
+from alexandria.typing import NodeID, Key
 
 
 NodePayload = Tuple[NodeID, bytes, int]
@@ -84,7 +96,7 @@ class Kademlia(Service, KademliaAPI):
             durable_db=durable_db,
             config=config.storage_config,
         )
-        self.advertise_tracker = AdvertiseTracker(KADEMLIA_ANNOUNCE_INTERVAL)
+        self.advertise_queue: TimeQueue[bytes] = TimeQueue(KADEMLIA_ANNOUNCE_INTERVAL)
 
         (
             self._inbound_content_send_channel,
@@ -92,7 +104,8 @@ class Kademlia(Service, KademliaAPI):
         ) = trio.open_memory_channel[Tuple[Node, bytes]](256)
 
         self.graph_db = GraphDB()
-        self._local_graph = LocalGraph(SGNode(self.client.local_node_id))
+        self.graph_queue: TimeQueue[Key] = TimeQueue(KADEMLIA_ANNOUNCE_INTERVAL)
+        self._local_graph = LocalGraph(SGNode(Key(self.client.local_node_id)))
 
     @property
     def graph(self) -> GraphAPI:
@@ -102,6 +115,8 @@ class Kademlia(Service, KademliaAPI):
             return self._network_graph
 
     async def run(self) -> None:
+        self.manager.run_task(self._do_initial_content_database_load)
+
         self.manager.run_daemon_task(self._periodic_report_routing_table_status)
 
         self.manager.run_daemon_task(self._pong_when_pinged)
@@ -115,13 +130,13 @@ class Kademlia(Service, KademliaAPI):
             self._handle_content_ingestion,
             self._inbound_content_receive_channel,
         )
+        self.manager.run_daemon_task(self._periodically_graph_content)
         self.manager.run_daemon_task(self._periodically_advertise_content)
 
         self.manager.run_daemon_task(self._ping_occasionally)
         self.manager.run_daemon_task(self._lookup_occasionally)
 
         self.manager.run_task(self._initialize_skip_graph)
-        self.manager.run_daemon_task(self._monitor_skip_graph)
         self.manager.run_daemon_task(self._handle_introduction_requests)
         self.manager.run_daemon_task(self._handle_link_nodes_requests)
         self.manager.run_daemon_task(self._handle_get_graph_node_requests)
@@ -173,7 +188,7 @@ class Kademlia(Service, KademliaAPI):
 
     async def _initialize_network_graph(self) -> GraphAPI:
         while self.manager.is_running:
-            random_content_id = secrets.randbits(256)
+            random_content_id = NodeID(secrets.randbits(256))
             candidates = await self.network.iterative_lookup(random_content_id)
             for node in candidates:
                 try:
@@ -189,12 +204,19 @@ class Kademlia(Service, KademliaAPI):
                     self.graph_db.set(sg_node.key, sg_node)
 
                 self.logger.info("Network SkipGraph initialized")
-                return NetworkGraph(self.graph_db, introduction_nodes[0], self.network)
+                network_graph = NetworkGraph(self.graph_db, introduction_nodes[0], self.network)
+                break
             else:
                 self.logger.debug(
                     f"Failed to initialize network Skip Graph after querying "
                     f"{len(candidates)} nodes."
                 )
+
+            break
+        else:
+            raise Exception("Failed to initialize network graph")
+
+        return network_graph
 
     async def _initialize_skip_graph(self) -> None:
         # 1. Get an introduction to the network's SkipGraph
@@ -203,52 +225,16 @@ class Kademlia(Service, KademliaAPI):
         # 2. Transfer everything from the temporary "local" SkipGraph into the
         # network one.
         for key in self._local_graph.db.keys():
-            if key == self.client.local_node_id:
+            # Skip this key if it is present.  It is used as a *magic* value to
+            # allow the local database to be intialized even if there is no
+            # content available locally.
+            if key == self.client.local_node_id:  # type: ignore
                 continue
-            try:
-                # TODO: this should be done concurrently
-                await self._network_graph.insert(key)
-            except AlreadyPresent:
-                continue
-
-        # 3. Ensure the network graph is populated with all of our local
-        # content.
-        ...
+            self.graph_queue.enqueue(key, 0.0)
 
     async def _monitor_skip_graph(self) -> None:
-        # A: broken neighbor links to unretrievable nodes.
-        # B: nodes with unretrievable data.
-        while self.manager.is_running:
-            await trio.hazmat.checkpoint()
-            self.logger.debug("Starting scan of skip graph....")
-            for key in self.graph_db.keys():
-                try:
-                    node = await self.graph.search(key)
-                except NotFound:
-                    self.logger.info(
-                        f"Local value from graph database not found in search: "
-                        f"{hex(key)}. Attempting re-insertion"
-                    )
-                    with trio.fail_after(INSERT_TIMEOUT):
-                        node = await self.graph.insert(key)
-                        continue
-
-                # Iterate over all neighbor links and validate that they point
-                # to retrievable nodes and that the node reflexively shares the
-                # neighbor relationship.  In both cases re-insertion of the
-                # node *should* repair things (TODO: is this accurate?)
-                for level, (left_key, right_key) in enumerate(node.iter_neighbors()):
-                    left = await self.graph.search(left_key)
-                    if left.get_right_neighbor(level) != key:
-                        with trio.fail_after(INSERT_TIMEOUT):
-                            await self.graph.insert(key)
-                            break
-
-                    right = await self.graph.search(right_key)
-                    if right.get_left_neighbor(level) != key:
-                        with trio.fail_after(INSERT_TIMEOUT):
-                            await self.graph.insert(key)
-                            break
+        # TODO: Need something that can repair a broken graph
+        ...
 
     async def _handle_introduction_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphGetIntroduction) as subscription:
@@ -270,8 +256,8 @@ class Kademlia(Service, KademliaAPI):
                     request_id=request.payload.request_id,
                 )
                 payload = request.payload
-                left_key = payload.left if payload.left is None else big_endian_to_int(payload.left)
-                right_key = payload.right if payload.right is None else big_endian_to_int(payload.right)  # noqa: E501
+                left_key = payload.left if payload.left is None else content_key_to_graph_key(payload.left)  # noqa: E501
+                right_key = payload.right if payload.right is None else content_key_to_graph_key(payload.right)  # noqa: E501
                 level = payload.level
 
                 if left_key is not None:
@@ -281,7 +267,7 @@ class Kademlia(Service, KademliaAPI):
                         pass
                     else:
                         try:
-                            left.set_right_neighbor(right_key, level)
+                            left.set_right_neighbor(level, right_key)
                         except ValidationError as err:
                             self.logger.debug("Error updating neighbor:", exc_info=True)
                             self.logger.info("Error updating neighbor: %s", str(err))
@@ -293,7 +279,7 @@ class Kademlia(Service, KademliaAPI):
                         pass
                     else:
                         try:
-                            right.set_left_neighbor(left_key, level)
+                            right.set_left_neighbor(level, left_key)
                         except ValidationError as err:
                             self.logger.debug("Error updating neighbor:", exc_info=True)
                             self.logger.info("Error updating neighbor: %s", str(err))
@@ -303,9 +289,9 @@ class Kademlia(Service, KademliaAPI):
             async for request in subscription:
                 self.logger.debug("handling request: %s", request)
                 # Acknowledge the request first, then do the linking.
-                key = big_endian_to_int(request.payload.key)
+                key = content_key_to_graph_key(request.payload.key)
 
-                sg_node: Optional[SGNode]
+                sg_node: Optional[SGNodeAPI]
                 try:
                     sg_node = self.graph_db.get(key)
                 except KeyError:
@@ -402,41 +388,69 @@ class Kademlia(Service, KademliaAPI):
                 )
                 await self.client.send_pong(request.node, request_id=request.payload.request_id)
 
-    async def _periodically_advertise_content(self) -> None:
+    async def _do_initial_content_database_load(self) -> None:
         def enqueue_all_content_keys() -> None:
-            self.logger.debug("Starting load of all content database into advertisement queue")
-            for key in self.content_manager.iter_content_keys():
-                self.advertise_tracker.enqueue(key, 0.0)
-            self.logger.debug("Finished load of all content database into advertisement queue")
+            self.logger.debug("Starting load of all content database into announce queue")
+            for key in tuple(self.content_manager.iter_content_keys()):
+                self.advertise_queue.enqueue(key, 0.0)
+                self.graph_queue.enqueue(content_key_to_graph_key(key), 0.0)
+            self.logger.debug("Finished load of all content database into announce queue")
 
         await trio.to_thread.run_sync(enqueue_all_content_keys)
 
+    async def _periodically_graph_content(self) -> None:
         semaphor = trio.Semaphore(
             KADEMLIA_ANNOUNCE_CONCURRENCY,
             max_value=KADEMLIA_ANNOUNCE_CONCURRENCY,
         )
 
-        async def do_announce(key):
+        async def do_graph_insert(key: Key) -> None:
+            # Insert the key into the skip graph.
             with trio.move_on_after(INSERT_TIMEOUT):
                 try:
                     await self.graph.insert(key)
                 except AlreadyPresent:
                     pass
 
+            self.graph_queue.enqueue(key)
+            semaphor.release()
+
+        async with trio.open_nursery() as nursery:
+            while self.manager.is_running:
+                key = await self.graph_queue.pop_next()
+                key_bytes = graph_key_to_content_key(key)
+                if not self.content_manager.has_key(key_bytes):  # noqa: W601
+                    self.logger.debug(
+                        'Discarding graph inserstion for key: %s',
+                        to_hex(key),
+                    )
+                    self.graph_db.delete(key)
+                    continue
+
+                self.logger.debug('Graph Insertion: %s', to_hex(key))
+
+                await semaphor.acquire()
+                nursery.start_soon(do_graph_insert, key)
+
+    async def _periodically_advertise_content(self) -> None:
+        semaphor = trio.Semaphore(
+            KADEMLIA_ANNOUNCE_CONCURRENCY,
+            max_value=KADEMLIA_ANNOUNCE_CONCURRENCY,
+        )
+
+        async def do_announce(key: bytes) -> None:
             with trio.move_on_after(ANNOUNCE_TIMEOUT):
                 await self.network.announce(
                     key,
                     Node(self.client.local_node_id, self.client.external_endpoint),
                 )
-            self.advertise_tracker.enqueue(key)
+            self.advertise_queue.enqueue(key)
             semaphor.release()
 
         async with trio.open_nursery() as nursery:
             while self.manager.is_running:
-                key = await self.advertise_tracker.pop_next()
-                try:
-                    self.content_manager.get_content(key)
-                except KeyError:
+                key = await self.advertise_queue.pop_next()
+                if not self.content_manager.has_data(key):
                     self.logger.debug(
                         'Discarding announcement key missing content: %s',
                         encode_hex(key),
@@ -476,7 +490,7 @@ class Kademlia(Service, KademliaAPI):
         )
         self.content_manager.ingest_content(bundle)
         if bundle.data:
-            self.advertise_tracker.enqueue(key, last_advertised_at=0.0)
+            self.advertise_queue.enqueue(key, queue_at=0.0)
 
     async def _handle_content_ingestion(self,
                                         receive_channel: trio.abc.ReceiveChannel[Tuple[Node, bytes]],  # noqa: E501

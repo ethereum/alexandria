@@ -3,121 +3,35 @@ import collections
 import functools
 import itertools
 import logging
-import time
 from typing import (
     Any,
     Deque,
     Dict,
     FrozenSet,
     Iterator,
-    KeysView,
     List,
     Mapping,
     Optional,
-    Set,
     Tuple,
 )
 
 from eth_utils import encode_hex, to_tuple
 from eth_utils.toolz import groupby
-import trio
 
 from alexandria._utils import content_key_to_node_id
 from alexandria.abc import (
-    ContentDatabaseAPI,
     ContentIndexAPI,
     ContentManagerAPI,
     ContentStats,
     ContentBundle,
-    Content,
     DurableDatabaseAPI,
     Location,
 )
+from alexandria.cache_db import CacheDB
 from alexandria.config import StorageConfig
+from alexandria.ephemeral_db import EphemeralDB
 from alexandria.typing import NodeID
 from alexandria.routing_table import compute_distance
-
-
-class BaseContentDB(ContentDatabaseAPI):
-    @property
-    def has_capacity(self) -> bool:
-        return self.capacity > 0
-
-
-@functools.total_ordering
-class SortableKey:
-    key: bytes
-    distance: int
-
-    def __init__(self, key: bytes, distance: int) -> None:
-        self.key = key
-        self.distance = distance
-
-    def __eq__(self, other: Any) -> bool:
-        if type(other) is type(self):
-            return self.key == other.key  # type: ignore
-        raise TypeError("Invalid comparison")
-
-    def __lt__(self, other: Any) -> bool:
-        if type(other) is type(self):
-            return self.distance < other.distance  # type: ignore
-        raise TypeError("Invalid comparison")
-
-
-class EphemeralDB(BaseContentDB):
-    _db: Dict[bytes, bytes]
-    _keys_by_distance: List[SortableKey]
-
-    def __init__(self, center_id: NodeID, capacity: int) -> None:
-        self._db = {}
-        self._keys_by_distance = []
-        self.center_id = center_id
-        self.capacity = capacity
-        self.total_capacity = capacity
-
-    def __len__(self) -> int:
-        return len(self._db)
-
-    def keys(self) -> KeysView[bytes]:
-        return collections.KeysView(self._db)
-
-    def _enforce_capacity(self) -> None:
-        while self.capacity < 0:
-            self.delete(self._keys_by_distance[-1].key)
-
-    def has(self, key: bytes) -> bool:
-        return key in self._db
-
-    def get(self, key: bytes) -> bytes:
-        return self._db[key]
-
-    def set(self, content: Content) -> None:
-        key, data = content
-        try:
-            if self.get(key) == data:
-                return
-            else:
-                self.delete(key)
-        except KeyError:
-            pass
-
-        self._db[key] = data
-        content_id = content_key_to_node_id(key)
-        distance = compute_distance(self.center_id, content_id)
-        bisect.insort_right(self._keys_by_distance, SortableKey(key, distance))
-        self.capacity -= len(data)
-        self._enforce_capacity()
-
-    def delete(self, key: bytes) -> None:
-        data = self._db.pop(key)
-        self.capacity += len(data)
-        content_id = content_key_to_node_id(key)
-        distance = compute_distance(self.center_id, content_id)
-        key_index = bisect.bisect_left(self._keys_by_distance, SortableKey(key, distance))
-        if self._keys_by_distance[key_index].key == key:
-            self._keys_by_distance.pop(key_index)
-        else:
-            assert False
 
 
 @functools.total_ordering
@@ -164,6 +78,9 @@ class EphemeralIndex(ContentIndexAPI):
     def get_index(self, key: NodeID) -> Tuple[NodeID, ...]:
         index = self._indices[key]
         return tuple(item.node_id for item in index)
+
+    def has(self, key: NodeID) -> bool:
+        return key in self._indices
 
     def add(self, location: Location) -> None:
         content_id, location_id = location
@@ -223,49 +140,6 @@ class EphemeralIndex(ContentIndexAPI):
             self._indices.pop(content_id)
 
 
-class CacheDB(BaseContentDB):
-    _records: 'collections.OrderedDict[bytes, bytes]'
-
-    def __init__(self, capacity: int) -> None:
-        self.capacity = capacity
-        self.total_capacity = capacity
-        self._records = collections.OrderedDict()
-
-    def __len__(self) -> int:
-        return len(self._records)
-
-    def keys(self) -> KeysView[bytes]:
-        return self._records.keys()
-
-    def _enforce_capacity(self) -> None:
-        while self.capacity < 0:
-            key, data = self._records.popitem(last=False)
-            self.capacity += len(data)
-
-    def has(self, key: bytes) -> bool:
-        return key in self._records
-
-    def get(self, key: bytes) -> bytes:
-        self._records.move_to_end(key, last=False)
-        return self._records[key]
-
-    def set(self, content: Content) -> None:
-        try:
-            current_data = self._records.pop(content.key)
-        except KeyError:
-            pass
-        else:
-            self.capacity += len(current_data)
-
-        self._records[content.key] = content.data
-        self.capacity -= len(content.data)
-        self._enforce_capacity()
-
-    def delete(self, key: bytes) -> None:
-        data = self._records.pop(key)
-        self.capacity += len(data)
-
-
 class CacheIndex(ContentIndexAPI):
     _records: Deque[Location]
     _cache_indices: Mapping[NodeID, FrozenSet[NodeID]]
@@ -320,6 +194,9 @@ class CacheIndex(ContentIndexAPI):
             self._touch_record(location)
         return tuple(index)
 
+    def has(self, key: NodeID) -> bool:
+        return key in self.cache_indices
+
     def add(self, location: Location) -> None:
         if location in self._records:
             self._touch_record(location)
@@ -336,67 +213,6 @@ class CacheIndex(ContentIndexAPI):
             self.capacity += 1
         else:
             raise KeyError(location)
-
-
-@functools.total_ordering
-class AdvertiseQueueItem:
-    def __init__(self,
-                 key: bytes,
-                 last_advertised_at: float) -> None:
-        self.key = key
-        self.last_advertised_at = last_advertised_at
-
-    def __eq__(self, other: Any) -> bool:
-        if type(self) is type(other):
-            return self.key == other.key  # type: ignore
-        raise TypeError("Type mismatch")
-
-    def __lt__(self, other: Any) -> bool:
-        if type(self) is type(other):
-            return self.last_advertised_at < other.last_advertised_at  # type: ignore
-        raise TypeError("Type mismatch")
-
-
-class AdvertiseTracker:
-    _queue: Deque[AdvertiseQueueItem]
-    _keys: Set[bytes]
-
-    def __init__(self, seconds_between_advertisements: int) -> None:
-        self._queue = collections.deque()
-        self._keys = set()
-        self._has_content = trio.Event()
-        self._seconds_between_advertisements = seconds_between_advertisements
-
-    def enqueue(self, key: bytes, last_advertised_at: float = None) -> None:
-        if key in self._keys:
-            return
-
-        if last_advertised_at is None:
-            last_advertised_at = time.monotonic()
-
-        bisect.insort_right(self._queue, AdvertiseQueueItem(key, last_advertised_at))
-        self._keys.add(key)
-        self._has_content.set()
-
-    def get_time_till_next_advertise(self) -> float:
-        delta = time.monotonic() - self._queue[0].last_advertised_at
-        return max(0.0, self._seconds_between_advertisements - delta)
-
-    async def pop_next(self) -> bytes:
-        await self._has_content.wait()
-
-        delay = self.get_time_till_next_advertise()
-        if delay > 0:
-            await trio.sleep(delay)
-
-        to_advertise = self._queue.popleft()
-        self._keys.remove(to_advertise.key)
-
-        if len(self._queue) == 0:
-            self._has_content.set()
-            self._has_content = trio.Event()
-
-        return to_advertise.key
 
 
 class ContentManager(ContentManagerAPI):
@@ -431,8 +247,8 @@ class ContentManager(ContentManagerAPI):
         # on the kademlia distance metric, preferring keys that are near our
         # center.
         self.ephemeral_db = EphemeralDB(
-            center_id=self.center_id,
             capacity=self.config.ephemeral_storage_size,
+            distance_fn=lambda key: compute_distance(center_id, content_key_to_node_id(key)),
         )
         self.ephemeral_index = EphemeralIndex(
             center_id=self.center_id,
@@ -473,6 +289,33 @@ class ContentManager(ContentManagerAPI):
             cache_index_capacity=self.cache_index.capacity,
         )
 
+    def has_key(self, key: bytes) -> bool:
+        if self.durable_db.has(key):
+            return True
+        elif self.ephemeral_db.has(key):
+            return True
+        elif self.cache_db.has(key):
+            return True
+
+        content_id = content_key_to_node_id(key)
+
+        if self.ephemeral_index.has(content_id):
+            return True
+        elif self.cache_index.has(content_id):
+            return True
+        else:
+            return False
+
+    def has_data(self, key: bytes) -> bool:
+        if self.durable_db.has(key):
+            return True
+        elif self.ephemeral_db.has(key):
+            return True
+        elif self.cache_db.has(key):
+            return True
+        else:
+            return False
+
     def get_content(self, key: bytes) -> bytes:
         try:
             return self.durable_db.get(key)
@@ -502,7 +345,7 @@ class ContentManager(ContentManagerAPI):
                     encode_hex(value_from_ephemeral),
                     encode_hex(value_from_cache),
                 )
-                self.cache_db.set(Content(key, value_from_ephemeral))
+                self.cache_db.set(key, value_from_ephemeral)
             return value_from_ephemeral
         elif value_from_ephemeral is not None:
             return value_from_ephemeral
@@ -539,7 +382,7 @@ class ContentManager(ContentManagerAPI):
         self._ingest_content_index(content_id, content.node_id)
 
     def _ingest_content_data(self, key: bytes, data: bytes) -> None:
-        if key in self.durable_db.keys():
+        if self.durable_db.has(key):
             local_data = self.durable_db.get(key)
             if local_data != data:
                 self.logger.warning(
@@ -553,8 +396,8 @@ class ContentManager(ContentManagerAPI):
             # the durable DB is canonical
             return
 
-        self.ephemeral_db.set(Content(key, data))
-        self.cache_db.set(Content(key, data))
+        self.ephemeral_db.set(key, data)
+        self.cache_db.set(key, data)
 
     def _ingest_content_index(self, content_id: NodeID, location_id: NodeID) -> None:
         location = Location(content_id, location_id)
