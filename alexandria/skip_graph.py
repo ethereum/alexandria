@@ -153,6 +153,7 @@ class GraphDB(GraphDatabaseAPI):
 
 class BaseGraph(GraphAPI):
     logger = logging.getLogger('alexandria.skip_graph.Graph')
+    cursor: Optional[SGNodeAPI] = None
 
     @abstractmethod
     async def get_node(self, key: Key) -> SGNodeAPI:
@@ -167,7 +168,13 @@ class BaseGraph(GraphAPI):
 
     async def insert(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> SGNodeAPI:
         if cursor is None:
-            cursor = self.cursor
+            if self.cursor is None:
+                self.cursor = SGNode(key=key)
+                self.db.set(key, self.cursor)
+                return self.cursor
+            else:
+                cursor = self.cursor
+
         self.logger.debug("Inserting: %d", key)
         left_neighbor, found, right_neighbor = await self._search(key, cursor, cursor.max_level)
         if found is not None:
@@ -234,6 +241,8 @@ class BaseGraph(GraphAPI):
 
     async def delete(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> None:
         if cursor is None:
+            if self.cursor is None:
+                raise Exception("No database cursor")
             cursor = self.cursor
         self.logger.debug('Deleting: %d', key)
         node = await self.search(key, cursor)
@@ -261,6 +270,8 @@ class BaseGraph(GraphAPI):
 
     async def search(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> SGNodeAPI:
         if cursor is None:
+            if self.cursor is None:
+                raise Exception("No database cursor")
             cursor = self.cursor
         self.logger.debug("Searching: %d", key)
         left, node, right = await self._search(key, cursor, cursor.max_level)
@@ -275,6 +286,8 @@ class BaseGraph(GraphAPI):
                    cursor: Optional[SGNodeAPI] = None,
                    ) -> FindResult:
         if cursor is None:
+            if self.cursor is None:
+                raise Exception("No database cursor")
             cursor = self.cursor
         return await self._search(key, cursor, cursor.max_level)
 
@@ -293,10 +306,7 @@ class BaseGraph(GraphAPI):
                     right_neighbor = await self.get_node(right_key)
                     return await self._search(key, right_neighbor, at_level)
             else:
-                right_neighbor_key = cursor.get_right_neighbor(0)
-                if right_neighbor_key is None:
-                    return cursor, None, None
-                right_neighbor = await self.get_node(right_neighbor_key)
+                right_neighbor = await self._get_right_neighbor(cursor, 0)
                 return cursor, None, right_neighbor
         elif key < cursor.key:
             for at_level, left_key in cursor.iter_down_left_levels(level):
@@ -307,10 +317,7 @@ class BaseGraph(GraphAPI):
                     left_neighbor = await self.get_node(left_key)
                     return await self._search(key, left_neighbor, at_level)
             else:
-                left_neighbor_key = cursor.get_left_neighbor(0)
-                if left_neighbor_key is None:
-                    return None, None, cursor
-                left_neighbor = await self.get_node(left_neighbor_key)
+                left_neighbor = await self._get_left_neighbor(cursor, 0)
                 return left_neighbor, None, cursor
         else:
             raise Exception("Invariant")
@@ -369,10 +376,11 @@ def _link_local_nodes(left: Optional[SGNodeAPI],
 
 
 class LocalGraph(BaseGraph):
-    def __init__(self, cursor: SGNodeAPI) -> None:
+    def __init__(self, cursor: Optional[SGNodeAPI] = None) -> None:
         self.cursor = cursor
         self.db = GraphDB()
-        self.db.set(cursor.key, cursor)
+        if cursor is not None:
+            self.db.set(cursor.key, cursor)
 
     async def get_node(self, key: Key) -> SGNodeAPI:
         try:
@@ -390,12 +398,14 @@ class LocalGraph(BaseGraph):
 class NetworkGraph(BaseGraph):
     def __init__(self,
                  db: GraphDatabaseAPI,
-                 cursor: SGNodeAPI,
+                 cursor: Optional[SGNodeAPI],
                  network: NetworkAPI) -> None:
-        self.db = db
-        self.db.set(cursor.key, cursor)
-
         self.cursor = cursor
+
+        self.db = db
+        if cursor is not None:
+            self.db.set(cursor.key, cursor)
+
         self._network = network
 
     async def get_node(self, key: Key) -> SGNodeAPI:

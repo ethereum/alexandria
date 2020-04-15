@@ -57,7 +57,6 @@ from alexandria.skip_graph import (
     GraphDB,
     NetworkGraph,
     LocalGraph,
-    SGNode,
     AlreadyPresent,
 )
 from alexandria.time_queue import TimeQueue
@@ -106,7 +105,7 @@ class Kademlia(Service, KademliaAPI):
 
         self.graph_db = GraphDB()
         self.graph_queue: TimeQueue[Key] = TimeQueue(KADEMLIA_ANNOUNCE_INTERVAL)
-        self._local_graph = LocalGraph(SGNode(Key(self.client.local_node_id)))
+        self._local_graph = LocalGraph()
 
     @property
     def graph(self) -> GraphAPI:
@@ -272,11 +271,18 @@ class Kademlia(Service, KademliaAPI):
         async with self.client.message_dispatcher.subscribe(GraphGetIntroduction) as subscription:
             async for request in subscription:
                 self.logger.info("handling request: %s", request)
-                await self.client.send_graph_introduction(
-                    request.node,
-                    request_id=request.payload.request_id,
-                    graph_nodes=(self.graph.cursor,),
-                )
+                if self.graph.cursor is not None:
+                    await self.client.send_graph_introduction(
+                        request.node,
+                        request_id=request.payload.request_id,
+                        graph_nodes=(self.graph.cursor,),
+                    )
+                else:
+                    await self.client.send_graph_introduction(
+                        request.node,
+                        request_id=request.payload.request_id,
+                        graph_nodes=tuple(),
+                    )
 
     async def _handle_link_nodes_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphLinkNodes) as subscription:

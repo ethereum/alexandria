@@ -875,7 +875,7 @@ FindResult = Union[
 
 
 class GraphAPI(ABC):
-    cursor: SGNodeAPI
+    cursor: Optional[SGNodeAPI]
     db: GraphDatabaseAPI
 
     @abstractmethod
