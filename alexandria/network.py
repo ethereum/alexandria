@@ -2,7 +2,7 @@ import collections
 import itertools
 import logging
 import math
-from typing import DefaultDict, Iterable, Optional, Sequence, Set, Tuple
+from typing import DefaultDict, Iterator, Optional, Sequence, Set, Tuple
 
 from eth_utils import to_tuple, encode_hex
 from eth_utils.toolz import take, partition_all
@@ -131,7 +131,7 @@ class Network(NetworkAPI):
                         received_nodes[node.node_id].add(node.endpoint)
 
         @to_tuple
-        def get_endpoints(node_id: NodeID) -> Iterable[Endpoint]:
+        def get_endpoints(node_id: NodeID) -> Iterator[Endpoint]:
             try:
                 yield self.endpoint_db.get_endpoint(node_id)
             except KeyError:
@@ -285,7 +285,7 @@ class Network(NetworkAPI):
                     continue
                 queried.add(location.node_id)
                 try:
-                    return await self.get_graph_node(node, key=key)
+                    return await self.get_graph_node(location, key=key)
                 except NotFound:
                     continue
         else:
@@ -332,7 +332,7 @@ class Network(NetworkAPI):
 def iter_closest_nodes(target: NodeID,
                        routing_table: RoutingTableAPI,
                        seen_nodes: Sequence[NodeID],
-                       ) -> Iterable[NodeID]:
+                       ) -> Iterator[NodeID]:
     """Iterate over the nodes in the routing table as well as additional nodes in order of
     distance to the target. Duplicates will only be yielded once.
     """

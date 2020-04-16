@@ -1,4 +1,4 @@
-from typing import AsyncIterable, TYPE_CHECKING
+from typing import AsyncIterator, TYPE_CHECKING
 
 import trio
 
@@ -28,7 +28,7 @@ class BootService(Service):
 
     async def _monitor_signals(self,
                                ready: trio.Event,
-                               signal_aiter: AsyncIterable['signal.Signals']) -> None:
+                               signal_aiter: AsyncIterator['signal.Signals']) -> None:
         import signal  # noqa: F811
         import logging
 

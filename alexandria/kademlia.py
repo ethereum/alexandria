@@ -1,6 +1,6 @@
 import logging
 import secrets
-from typing import Iterable, Optional, Tuple
+from typing import Iterator, Optional, Tuple
 
 from async_service import Service
 from eth_utils import (
@@ -42,6 +42,7 @@ from alexandria.constants import (
 )
 from alexandria.content_manager import ContentManager
 from alexandria.exceptions import ContentNotFound
+from alexandria.mechanic import Mechanic
 from alexandria.payloads import (
     FindNodes,
     Ping,
@@ -58,6 +59,7 @@ from alexandria.skip_graph import (
     NetworkGraph,
     LocalGraph,
     AlreadyPresent,
+    Missing,
 )
 from alexandria.time_queue import TimeQueue
 from alexandria.typing import NodeID, Key
@@ -152,7 +154,6 @@ class Kademlia(Service, KademliaAPI):
                 continue
 
             graph_nodes = []
-            from alexandria.skip_graph import Missing
             try:
                 async for node in self.graph.iter_items():
                     graph_nodes.append(node)
@@ -256,32 +257,40 @@ class Kademlia(Service, KademliaAPI):
         # 2. Transfer everything from the temporary "local" SkipGraph into the
         # network one.
         for key in self._local_graph.db.keys():
-            # Skip this key if it is present.  It is used as a *magic* value to
-            # allow the local database to be intialized even if there is no
-            # content available locally.
-            if key == self.client.local_node_id:  # type: ignore
-                continue
-            self.graph_queue.enqueue(key, 0.0)
+            self.logger.info("Migrating key from local db: %s", hex(key))
+            self.graph_queue.enqueue(key)
+            try:
+                await self.graph.insert(key)
+            except AlreadyPresent:
+                self.logger.info("Key already in database: %s", hex(key))
+            except Missing:
+                self.logger.info("Failed to insert key due to broken graph: %s", hex(key))
+            else:
+                self.logger.error("INSERTED KEY SUCCESSFULLY: %s", hex(key))
 
-    async def _monitor_skip_graph(self) -> None:
-        # TODO: Need something that can repair a broken graph
-        ...
+        # 3. Start the Mechanic
+        self.manager.run_daemon_child_service(Mechanic(self.network, self.graph))
 
+    #
+    # Request Handling: Skip Graph
+    #
     async def _handle_introduction_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphGetIntroduction) as subscription:
             async for request in subscription:
                 self.logger.info("handling request: %s", request)
-                if self.graph.cursor is not None:
-                    await self.client.send_graph_introduction(
-                        request.node,
-                        request_id=request.payload.request_id,
-                        graph_nodes=(self.graph.cursor,),
-                    )
-                else:
+                if self.graph.cursor is None:
+                    self.logger.info("Sending empty introduction")
                     await self.client.send_graph_introduction(
                         request.node,
                         request_id=request.payload.request_id,
                         graph_nodes=tuple(),
+                    )
+                else:
+                    self.logger.info("Sending introduction: %s", self.graph.cursor)
+                    await self.client.send_graph_introduction(
+                        request.node,
+                        request_id=request.payload.request_id,
+                        graph_nodes=(self.graph.cursor,),
                     )
 
     async def _handle_link_nodes_requests(self) -> None:
@@ -341,6 +350,9 @@ class Kademlia(Service, KademliaAPI):
                     sg_node=sg_node,
                 )
 
+    #
+    # Request Handling: Content
+    #
     async def _handle_lookup_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(FindNodes) as subscription:
             while self.manager.is_running:
@@ -365,7 +377,7 @@ class Kademlia(Service, KademliaAPI):
                 )
 
     @to_tuple
-    def _get_nodes_at_distance(self, distance: int) -> Iterable[Node]:
+    def _get_nodes_at_distance(self, distance: int) -> Iterator[Node]:
         """Send a Nodes message containing ENRs of peers at a given node distance."""
         nodes_at_distance = self.routing_table.get_nodes_at_log_distance(distance)
 
@@ -442,6 +454,7 @@ class Kademlia(Service, KademliaAPI):
 
         async def do_graph_insert(key: Key) -> None:
             # Insert the key into the skip graph.
+            self.logger.info("Performing graph insertion: %s", hex(key))
             with trio.move_on_after(INSERT_TIMEOUT):
                 try:
                     await self.graph.insert(key)

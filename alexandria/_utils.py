@@ -1,7 +1,7 @@
 import hashlib
 import itertools
 import math
-from typing import AsyncGenerator, Iterable, Optional
+from typing import AsyncGenerator, Iterator, Optional
 
 from eth_keys import keys
 from eth_typing import Hash32
@@ -72,7 +72,7 @@ async def every(interval: float,
 
 
 @to_tuple
-def split_data_to_chunks(chunk_size: int, data: bytes) -> Iterable[bytes]:
+def split_data_to_chunks(chunk_size: int, data: bytes) -> Iterator[bytes]:
     num_chunks = int(math.ceil(len(data) / chunk_size))
     data_view = memoryview(data)
     for chunk_number in range(num_chunks):

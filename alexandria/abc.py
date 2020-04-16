@@ -1,8 +1,11 @@
+import enum
 from abc import ABC, abstractmethod
 import ipaddress
+import operator
 from typing import (
     AsyncContextManager,
     AsyncIterator,
+    Callable,
     Collection,
     Deque,
     Dict,
@@ -361,10 +364,32 @@ class MessageDispatcherAPI(ServiceAPI):
         ...
 
 
+class Direction(enum.IntEnum):
+    left = 0
+    right = 1
+
+    @property
+    def opposite(self) -> 'Direction':
+        if self is Direction.left:
+            return Direction.right
+        elif self is Direction.right:
+            return Direction.left
+        else:
+            raise Exception("Invariant")
+
+    @property
+    def comparison_fn(self) -> Callable[[Key, Key], bool]:
+        if self is Direction.left:
+            return operator.lt
+        elif self is Direction.right:
+            return operator.gt
+        else:
+            raise Exception("Invariant")
+
+
 class SGNodeAPI(ABC):
     key: Key
-    neighbors_left: List[Key]
-    neighbors_right: List[Key]
+    neighbors = Tuple[List[Key], List[Key]]
     membership_vector: NodeID
 
     @property
@@ -373,31 +398,26 @@ class SGNodeAPI(ABC):
         ...
 
     @abstractmethod
-    def get_membership_at_level(self, at_level: int) -> int:
+    def get_neighbor(self, at_level: int, direction: Direction) -> Optional[Key]:
         ...
 
     @abstractmethod
-    def get_right_neighbor(self, at_level: int) -> Optional[Key]:
+    def set_neighbor(self, at_level: int, direction: Direction, key: Optional[Key]) -> None:
         ...
 
     @abstractmethod
-    def get_left_neighbor(self, at_level: int) -> Optional[Key]:
+    def iter_neighbors(self) -> Iterator[Tuple[int, Direction, Key]]:
         ...
 
     @abstractmethod
-    def set_left_neighbor(self, at_level: int, key: Optional[Key]) -> None:
+    def iter_neighbor_pairs(self) -> Iterator[Tuple[Optional[Key], Optional[Key]]]:
         ...
 
     @abstractmethod
-    def set_right_neighbor(self, at_level: int, key: Optional[Key]) -> None:
-        ...
-
-    @abstractmethod
-    def iter_down_left_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
-        ...
-
-    @abstractmethod
-    def iter_down_right_levels(self, from_level: int) -> Iterator[Tuple[int, Optional[Key]]]:
+    def iter_down_levels(self,
+                         from_level: int,
+                         direction: Direction,
+                         ) -> Iterator[Tuple[int, Optional[Key]]]:
         ...
 
 
@@ -875,8 +895,13 @@ FindResult = Union[
 
 
 class GraphAPI(ABC):
-    cursor: Optional[SGNodeAPI]
+    cursor: SGNodeAPI
     db: GraphDatabaseAPI
+
+    @property
+    @abstractmethod
+    def has_cursor(self) -> bool:
+        ...
 
     @abstractmethod
     async def insert(self, key: Key, cursor: Optional[SGNodeAPI] = None) -> SGNodeAPI:

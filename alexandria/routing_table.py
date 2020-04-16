@@ -2,7 +2,7 @@ import collections
 import functools
 import itertools
 import logging
-from typing import Any, Deque, Iterable, Iterator, Optional, Tuple
+from typing import Any, Deque, Iterator, Optional, Tuple
 
 from alexandria._utils import humanize_node_id
 from alexandria.abc import RoutingTableAPI, RoutingTableStats, BucketInfo
@@ -238,5 +238,5 @@ class RoutingTable(RoutingTableAPI):
         for node_id in sorted_node_ids:
             yield node_id
 
-    def iter_nodes(self) -> Iterable[NodeID]:
+    def iter_nodes(self) -> Iterator[NodeID]:
         yield from itertools.chain(*self.buckets)

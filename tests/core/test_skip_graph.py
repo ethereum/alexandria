@@ -140,3 +140,31 @@ async def test_delete(key_order):
             await graph.search(key, anchor)
 
         validate_graph(graph)
+
+
+def test_skip_graph_iteration():
+    graph = LocalGraph()
+
+    keys = (1, 2, 3, 5, 8)
+
+    for key in keys:
+        await graph.insert(key)
+
+    async def assert_key_iter(start, end, expected_keys):
+        actual_items = tuple([key, node async for key, node in graph.iter_items(start, end)])
+        actual_keys = tuple([key for key in graph.iter_keys(start, end)])
+        actual_values = tuple([node async for node in graph.iter_values(start, end)])
+
+        assert len(actual_items) == len(expected_keys)
+        assert len(actual_keys) == len(expected_keys)
+        assert len(actual_values) == len(expected_keys)
+
+        for expected_key, (actual_key, node) in zip(expected_key, actual_items):
+            assert actual_key == expected_key
+            assert node.key == expected_key
+
+        for expected_key, actual_key in zip(expected_key, actual_keys):
+            assert actual_key == expected_key
+
+        for expected_key, node in zip(expected_key, actual_values):
+            assert node.key == expected_key

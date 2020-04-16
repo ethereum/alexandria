@@ -39,7 +39,7 @@ def make_durable_db(db_path):
     db_path.mkdir(parents=True, exist_ok=True)
     db = DurableDB(db_path)
 
-    for _ in range(256):
+    for _ in range(4):
         content_id = random.randint(0, 65535)
         key = b'key-%d' % content_id
         value = b'value-%d' % content_id
