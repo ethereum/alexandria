@@ -47,8 +47,8 @@ def make_durable_db(db_path):
 
     for _ in range(32):
         content_id = random.randint(0, 65535)
-        key = b'key-%d' % content_id
-        value = b'value-%d' % content_id
+        key = b'k%d' % content_id
+        value = b'v%d' % content_id
         db.set(key, value)
 
     return db

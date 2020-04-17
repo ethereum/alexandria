@@ -7,7 +7,6 @@ from eth_utils import (
     encode_hex,
     to_tuple,
     ValidationError,
-    to_hex,
 )
 import trio
 
@@ -16,7 +15,6 @@ from alexandria._utils import (
     humanize_node_id,
     content_key_to_node_id,
     content_key_to_graph_key,
-    graph_key_to_content_key,
 )
 from alexandria.abc import (
     ClientAPI,
@@ -40,6 +38,7 @@ from alexandria.constants import (
     INTRODUCTION_TIMEOUT,
     INSERT_TIMEOUT,
     GET_GRAPH_NODE_TIMEOUT,
+    LINK_TIMEOUT,
 )
 from alexandria.content_manager import ContentManager
 from alexandria.exceptions import ContentNotFound
@@ -67,7 +66,7 @@ from alexandria.skip_graph import (
     SGNode,
 )
 from alexandria.time_queue import TimeQueue
-from alexandria.typing import NodeID, Key
+from alexandria.typing import Key, NodeID
 
 
 NodePayload = Tuple[NodeID, bytes, int]
@@ -111,7 +110,6 @@ class Kademlia(Service, KademliaAPI):
         ) = trio.open_memory_channel[Tuple[Node, bytes]](256)
 
         self.graph_db = GraphDB()
-        self.graph_queue: TimeQueue[Key] = TimeQueue(KADEMLIA_ANNOUNCE_INTERVAL)
         self._network_graph_ready = trio.Event()
 
     async def run(self) -> None:
@@ -130,7 +128,6 @@ class Kademlia(Service, KademliaAPI):
             self._handle_content_ingestion,
             self._inbound_content_receive_channel,
         )
-        self.manager.run_daemon_task(self._periodically_graph_content)
         self.manager.run_daemon_task(self._periodically_advertise_content)
 
         self.manager.run_daemon_task(self._ping_occasionally)
@@ -230,14 +227,18 @@ class Kademlia(Service, KademliaAPI):
                 with trio.fail_after(INTRODUCTION_TIMEOUT):
                     candidates = await self.network.get_introduction(node)
             except trio.TooSlowError:
+                self.logger.error("Timeout getting introduction")
                 return
+            self.logger.error("Got %d introductions", len(candidates))
 
             for candidate in candidates:
+                self.logger.error("Starting Traversal....")
                 result = await get_traversal_result(
                     self.network,
                     candidate,
                     max_traversal_distance=10,
                 )
+                self.logger.error("Finished Traversal....")
                 await send_channel.send(result)
 
         while self.manager.is_running:
@@ -311,12 +312,14 @@ class Kademlia(Service, KademliaAPI):
             async for request in subscription:
                 self.logger.debug("handling request: %s", request)
                 if not self._network_graph_ready.is_set():
+                    self.logger.error("%s: Sending empty introduction", request)
                     await self.client.send_graph_introduction(
                         request.node,
                         request_id=request.payload.request_id,
                         graph_nodes=tuple(),
                     )
                 else:
+                    self.logger.error("%s: Sending introduction: %s", request, self.graph.cursor)
                     await self.client.send_graph_introduction(
                         request.node,
                         request_id=request.payload.request_id,
@@ -392,7 +395,6 @@ class Kademlia(Service, KademliaAPI):
         async with self.client.message_dispatcher.subscribe(GraphGetNode) as subscription:
             async for request in subscription:
                 self.logger.debug("handling request: %s", request)
-                # Acknowledge the request first, then do the linking.
                 key = content_key_to_graph_key(request.payload.key)
 
                 sg_node: Optional[SGNodeAPI]
@@ -500,47 +502,21 @@ class Kademlia(Service, KademliaAPI):
         for key in tuple(self.content_manager.iter_content_keys()):
             await trio.hazmat.checkpoint()
             self.advertise_queue.enqueue(key, 0.0)
-            self.graph_queue.enqueue(content_key_to_graph_key(key), 0.0)
         self.logger.info("Finished load of all content database into announce queue")
 
-    async def _periodically_graph_content(self) -> None:
-        semaphor = trio.Semaphore(
-            KADEMLIA_ANNOUNCE_CONCURRENCY,
-            max_value=KADEMLIA_ANNOUNCE_CONCURRENCY,
-        )
-
-        async def do_graph_insert(key: Key) -> None:
-            # Insert the key into the skip graph.
-            with trio.move_on_after(INSERT_TIMEOUT):
-                try:
-                    sg_node = await self.graph.insert(key)
-                except AlreadyPresent:
-                    pass
-                else:
-                    self.graph_db.set(key, sg_node)
-
-            self.graph_queue.enqueue(key)
-            semaphor.release()
-
-        await self.wait_graph_initialized()
+    async def _broadcast_node_links(self, sg_node: SGNodeAPI) -> None:
+        async def do_link(left: Optional[Key], right: Optional[Key], level: int) -> None:
+            with trio.move_on_after(LINK_TIMEOUT):
+                await self.network.link_nodes(left, right, level)
 
         async with trio.open_nursery() as nursery:
-            while self.manager.is_running:
-                key = await self.graph_queue.pop_next()
-                key_bytes = graph_key_to_content_key(key)
-
-                if not self.content_manager.has_key(key_bytes):  # noqa: W601
-                    self.logger.debug(
-                        'Discarding graph inserstion for key: %s',
-                        to_hex(key),
-                    )
-                    self.graph_db.delete(key)
-                    continue
-
-                self.logger.debug('Graph Insertion: %s', to_hex(key))
-
-                await semaphor.acquire()
-                nursery.start_soon(do_graph_insert, key)
+            for level, direction, key in sg_node.iter_neighbors():
+                if direction is LEFT:
+                    nursery.start_soon(do_link, key, sg_node.key, level)
+                elif direction is RIGHT:
+                    nursery.start_soon(do_link, sg_node.key, key, level)
+                else:
+                    raise Exception("Invariant")
 
     async def _periodically_advertise_content(self) -> None:
         semaphor = trio.Semaphore(
@@ -549,11 +525,25 @@ class Kademlia(Service, KademliaAPI):
         )
 
         async def do_announce(key: bytes) -> None:
+            # Insert the key into the skip graph.
+            with trio.move_on_after(INSERT_TIMEOUT):
+                await self.wait_graph_initialized()
+
+                graph_key = content_key_to_graph_key(key)
+                try:
+                    sg_node = await self.graph.insert(graph_key)
+                except AlreadyPresent:
+                    pass
+                else:
+                    self.graph_db.set(graph_key, sg_node)
+                    self.manager.run_task(self._broadcast_node_links, sg_node)
+
             with trio.move_on_after(ANNOUNCE_TIMEOUT):
                 await self.network.announce(
                     key,
                     Node(self.client.local_node_id, self.client.external_endpoint),
                 )
+
             self.advertise_queue.enqueue(key)
             semaphor.release()
 

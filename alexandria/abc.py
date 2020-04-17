@@ -948,5 +948,4 @@ class KademliaAPI(ServiceAPI):
     content_manager: ContentManagerAPI
     graph_db: GraphDatabaseAPI
     advertise_queue: TimeQueueAPI[bytes]
-    graph_queue: TimeQueueAPI[Key]
     graph: GraphAPI

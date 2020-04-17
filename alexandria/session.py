@@ -318,10 +318,13 @@ class SessionRecipient(BaseSession):
                 message=message,
                 key=self._session_keys.encryption_key,
             )
-            await self._outbound_packet_send_channel.send(NetworkPacket(
-                packet=packet,
-                endpoint=self.remote_endpoint,
-            ))
+            try:
+                await self._outbound_packet_send_channel.send(NetworkPacket(
+                    packet=packet,
+                    endpoint=self.remote_endpoint,
+                ))
+            except trio.BrokenResourceError:
+                pass
         elif self.is_before_handshake:
             self.logger.debug(
                 "%s: outbound message before handshake: %s",

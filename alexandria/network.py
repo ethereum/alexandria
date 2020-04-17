@@ -296,6 +296,8 @@ class Network(NetworkAPI):
                     hex(key),
                 )
                 return
+            except NotFound:
+                return
 
             if filter_fn is None or filter_fn(node):
                 async with send_channel:
@@ -364,11 +366,12 @@ class Network(NetworkAPI):
                 content_key = graph_key_to_content_key(key)
                 content_id = content_key_to_node_id(content_key)
                 for node in await self.iterative_lookup(content_id):
-                    nursery.start_soon(do_link, node)
 
                     content_locations = await self.locate(node, key=content_key)
                     for location in content_locations:
                         if location.node_id in updated:
+                            continue
+                        if location.node_id == self.client.local_node_id:
                             continue
                         updated.add(location.node_id)
                         nursery.start_soon(do_link, location)

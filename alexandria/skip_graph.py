@@ -498,9 +498,6 @@ class NetworkGraph(BaseGraph):
                          right: Optional[SGNodeAPI],
                          level: int) -> None:
         _link_local_nodes(left, right, level)
-        left_key = left if left is None else left.key
-        right_key = right if right is None else right.key
-        await self._network.link_nodes(left_key, right_key, level)
 
 
 #
@@ -602,7 +599,7 @@ async def scan_level(network: NetworkAPI,
     neighbor_candidates = await get_node_versions(network, neighbor_key)
     if not neighbor_candidates:
         # Terminal: Neighbor key unretrievable from network
-        return ()
+        return (neighbor_key,)
 
     # Filter those down to only the ones that share the reflexive
     # relationship.
@@ -614,7 +611,7 @@ async def scan_level(network: NetworkAPI,
     if not neighbors:
         # Terminal: None of the neighbor candidates at this level are
         # reflexively linked.
-        return ()
+        return (neighbor_key,)
 
     if max_traversal_distance == 1:
         # Terminal: There is a valid neighbor but we are out of traversal distance
