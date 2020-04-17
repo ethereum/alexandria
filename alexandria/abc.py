@@ -686,7 +686,10 @@ class NetworkAPI(ABC):
         ...
 
     @abstractmethod
-    async def get_node(self, key: Key) -> SGNodeAPI:
+    async def get_node(self,
+                       key: Key,
+                       filter_fn: Optional[Callable[[SGNodeAPI], bool]] = None,
+                       ) -> SGNodeAPI:
         ...
 
     @abstractmethod
@@ -946,8 +949,4 @@ class KademliaAPI(ServiceAPI):
     graph_db: GraphDatabaseAPI
     advertise_queue: TimeQueueAPI[bytes]
     graph_queue: TimeQueueAPI[Key]
-
-    @property
-    @abstractmethod
-    def graph(self) -> GraphAPI:
-        ...
+    graph: GraphAPI

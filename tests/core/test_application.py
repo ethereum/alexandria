@@ -26,8 +26,14 @@ def base_db_path():
 
 
 @pytest.fixture
-async def bootnode():
-    bootnode = ApplicationFactory()
+async def bootnode(base_db_path):
+    config = KademliaConfig(can_initialize_network_skip_graph=True)
+    durable_db = make_durable_db(base_db_path / f"bootnode")
+
+    bootnode = ApplicationFactory(
+        durable_db=durable_db,
+        config=config,
+    )
     logger.info('BOOTNODE: %s', humanize_node_id(bootnode.client.local_node_id))
     async with bootnode.client.events.listening.subscribe() as listening:
         async with background_trio_service(bootnode):
@@ -39,7 +45,7 @@ def make_durable_db(db_path):
     db_path.mkdir(parents=True, exist_ok=True)
     db = DurableDB(db_path)
 
-    for _ in range(4):
+    for _ in range(32):
         content_id = random.randint(0, 65535)
         key = b'key-%d' % content_id
         value = b'value-%d' % content_id

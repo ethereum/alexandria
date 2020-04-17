@@ -2,7 +2,7 @@ import collections
 import itertools
 import logging
 import math
-from typing import DefaultDict, Iterator, Optional, Sequence, Set, Tuple
+from typing import Callable, DefaultDict, Iterator, Optional, Sequence, Set, Tuple
 
 from eth_utils import to_tuple, encode_hex
 from eth_utils.toolz import take, partition_all
@@ -24,6 +24,8 @@ from alexandria.constants import (
     KADEMLIA_ANNOUNCE_CONCURRENCY,
     PING_TIMEOUT,
     LINK_TIMEOUT,
+    GET_GRAPH_NODE_TIMEOUT,
+    LOCATE_TIMEOUT,
 )
 from alexandria.exceptions import ContentNotFound
 from alexandria.routing_table import compute_log_distance, compute_distance
@@ -272,27 +274,70 @@ class Network(NetworkAPI):
         else:
             return response.payload.node.to_sg_node()
 
-    async def get_node(self, key: Key) -> SGNodeAPI:
+    async def get_node(self,
+                       key: Key,
+                       filter_fn: Optional[Callable[[SGNodeAPI], bool]] = None,
+                       ) -> SGNodeAPI:
         content_key = graph_key_to_content_key(key)
         content_id = content_key_to_node_id(content_key)
         nodes_near_content = await self.iterative_lookup(content_id)
         queried: Set[NodeID] = set()
 
-        # TODO: these lookups can happen concurrently....
-        for node in nodes_near_content:
-            for location in await self.locate(node, key=content_key):
+        send_channel, receive_channel = trio.open_memory_channel[SGNodeAPI](0)
+
+        async def do_get_node(location: Node):
+            try:
+                with trio.fail_after(GET_GRAPH_NODE_TIMEOUT):
+                    node = await self.get_graph_node(location, key=key)
+            except trio.TooSlowError:
+                self.logger.debug(
+                    "Timed out looking up graph node: node=%s  key=%s",
+                    location,
+                    hex(key),
+                )
+                return
+
+            if filter_fn is None or filter_fn(node):
+                async with send_channel:
+                    await send_channel.send(node)
+            else:
+                self.logger.info("Discarding retrieved node that failed filter function: %s", node)
+
+        async def do_get_locations(nursery: trio.Nursery, node: Node):
+            try:
+                with trio.fail_after(LOCATE_TIMEOUT):
+                    locations = await self.locate(node, key=content_key)
+            except trio.TooSlowError:
+                self.logger.debug(
+                    "Timed out looking up locations: node=%s  content-key=%s",
+                    node,
+                    content_key,
+                )
+                return
+
+            for location in locations:
                 if location.node_id in queried:
                     continue
-                queried.add(location.node_id)
-                try:
-                    return await self.get_graph_node(location, key=key)
-                except NotFound:
+                elif location.node_id == self.client.local_node_id:
                     continue
-        else:
-            raise NotFound(
-                f"Could not find node after querying {len(queried)} "
-                f"locations provided by {len(nodes_near_content)} nodes"
-            )
+                queried.add(location.node_id)
+                nursery.start_soon(do_get_node, location)
+
+        async with trio.open_nursery() as nursery:
+            for node in nodes_near_content:
+                nursery.start_soon(do_get_locations, nursery, node)
+
+            try:
+                with trio.fail_after(2 * GET_GRAPH_NODE_TIMEOUT):
+                    async with receive_channel:
+                        return await receive_channel.receive()
+            except trio.TooSlowError:
+                raise NotFound(
+                    f"Could not find node after querying {len(queried)} "
+                    f"locations provided by {len(nodes_near_content)} nodes"
+                )
+            finally:
+                nursery.cancel_scope.cancel()
 
     async def link_nodes(self,
                          left: Optional[Key],

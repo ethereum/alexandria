@@ -29,5 +29,7 @@ class KademliaConfig(NamedTuple):
 
     storage_config: StorageConfig = StorageConfig()
 
+    can_initialize_network_skip_graph: bool = False
+
 
 DEFAULT_CONFIG = KademliaConfig()

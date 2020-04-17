@@ -48,12 +48,12 @@ async def do_test_skip_graph_insert_fuzz(anchor_key, keys_to_insert, random_modu
     inserted = {anchor_key}
 
     for key in keys_to_insert:
-        anchor_from = graph.db.get(random.choice(tuple(inserted)))
+        graph.cursor = graph.db.get(random.choice(tuple(inserted)))
         if key in inserted:
             with pytest.raises(AlreadyPresent):
-                await graph.insert(key, anchor_from)
+                await graph.insert(key)
         else:
-            node = await graph.insert(key, anchor_from)
+            node = await graph.insert(key)
             assert node.key == key
             inserted.add(key)
         validate_graph(graph)
@@ -90,26 +90,26 @@ async def do_test_skip_graph_search_fuzz(anchor_key, keys_to_insert, keys_to_sea
     inserted = {anchor_key}
 
     for key in keys_to_insert:
-        anchor_from = graph.db.get(random.choice(tuple(inserted)))
+        graph.cursor = graph.db.get(random.choice(tuple(inserted)))
         if key in inserted:
             with pytest.raises(AlreadyPresent):
-                await graph.insert(key, anchor_from)
+                await graph.insert(key)
         else:
-            node = await graph.insert(key, anchor_from)
+            node = await graph.insert(key)
             assert node.key == key
             inserted.add(key)
 
     validate_graph(graph)
 
     for key in keys_to_search:
-        search_anchor = graph.db._db[random.choice(tuple(inserted))]
+        graph.cursor = graph.db._db[random.choice(tuple(inserted))]
 
         if key == anchor_key or key in keys_to_insert:
-            node = await graph.search(key, search_anchor)
+            node = await graph.search(key)
             assert node.key == key
         else:
             with pytest.raises(NotFound):
-                await graph.search(key, search_anchor)
+                await graph.search(key)
 
 
 @given(
@@ -131,16 +131,28 @@ def test_skip_graph_iteration(raw_keys, start, end):
 
 
 async def do_test_skip_graph_iteration(raw_keys, start, end):
-    graph = LocalGraph()
-
     ordered_keys = tuple(sorted(set(raw_keys)))
-    left_index = bisect.bisect_left(ordered_keys, start)
     if end is None:
+        left_index = bisect.bisect_left(ordered_keys, start)
         right_index = None
-    else:
+    elif end >= start:
+        left_index = bisect.bisect_left(ordered_keys, start)
         right_index = bisect.bisect_left(ordered_keys, end)
+    elif end < start:
+        left_index = bisect.bisect_right(ordered_keys, end)
+        right_index = bisect.bisect_right(ordered_keys, start)
+    else:
+        raise Exception("Invariant")
 
-    expected_keys = ordered_keys[left_index:right_index]
+    graph = LocalGraph(SGNode(ordered_keys[0]))
+
+    for key in set(raw_keys).difference({ordered_keys[0]}):
+        await graph.insert(key)
+
+    if end is None or end >= start:
+        expected_keys = ordered_keys[left_index:right_index]
+    else:
+        expected_keys = tuple(reversed(ordered_keys[left_index:right_index]))
 
     actual_items = tuple([(key, node) async for key, node in graph.iter_items(start, end)])
     actual_keys = tuple([key async for key in graph.iter_keys(start, end)])

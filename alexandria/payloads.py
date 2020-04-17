@@ -151,10 +151,10 @@ class SkipGraphNode(sedes.Serializable):  # type: ignore
         return cls(
             key=graph_key_to_content_key(sg_node.key),
             neighbors_left=tuple(
-                graph_key_to_content_key(neighbor) for neighbor in sg_node.neighbors_left
+                graph_key_to_content_key(neighbor) for neighbor in sg_node.neighbors[0]
             ),
             neighbors_right=tuple(
-                graph_key_to_content_key(neighbor) for neighbor in sg_node.neighbors_right
+                graph_key_to_content_key(neighbor) for neighbor in sg_node.neighbors[1]
             ),
         )
 

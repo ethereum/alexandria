@@ -39,10 +39,10 @@ from alexandria.constants import (
     KADEMLIA_ANNOUNCE_CONCURRENCY,
     INTRODUCTION_TIMEOUT,
     INSERT_TIMEOUT,
+    GET_GRAPH_NODE_TIMEOUT,
 )
 from alexandria.content_manager import ContentManager
 from alexandria.exceptions import ContentNotFound
-from alexandria.mechanic import Mechanic
 from alexandria.payloads import (
     FindNodes,
     Ping,
@@ -60,6 +60,11 @@ from alexandria.skip_graph import (
     LocalGraph,
     AlreadyPresent,
     Missing,
+    TraversalResults,
+    get_traversal_result,
+    LEFT,
+    RIGHT,
+    SGNode,
 )
 from alexandria.time_queue import TimeQueue
 from alexandria.typing import NodeID, Key
@@ -107,14 +112,7 @@ class Kademlia(Service, KademliaAPI):
 
         self.graph_db = GraphDB()
         self.graph_queue: TimeQueue[Key] = TimeQueue(KADEMLIA_ANNOUNCE_INTERVAL)
-        self._local_graph = LocalGraph()
-
-    @property
-    def graph(self) -> GraphAPI:
-        if self._network_graph is None:
-            return self._local_graph
-        else:
-            return self._network_graph
+        self._network_graph_ready = trio.Event()
 
     async def run(self) -> None:
         self.manager.run_task(self._do_initial_content_database_load)
@@ -147,7 +145,12 @@ class Kademlia(Service, KademliaAPI):
 
         await self.manager.wait_finished()
 
+    async def wait_graph_initialized(self) -> None:
+        await self._network_graph_ready.wait()
+
     async def _monitor_graph(self) -> None:
+        await self.wait_graph_initialized()
+
         async for _ in every(60):
             if isinstance(self.graph, LocalGraph):
                 self.logger.info("Graph not initialized yet, waiting...")
@@ -220,56 +223,85 @@ class Kademlia(Service, KademliaAPI):
             )
 
     async def _initialize_network_graph(self) -> GraphAPI:
+        async def do_get_introduction(node: Node,
+                                      send_channel: trio.abc.SendChannel[Tuple[SGNodeAPI, TraversalResults]],  # noqa: E501
+                                      ) -> None:
+            try:
+                with trio.fail_after(INTRODUCTION_TIMEOUT):
+                    candidates = await self.network.get_introduction(node)
+            except trio.TooSlowError:
+                return
+
+            for candidate in candidates:
+                result = await get_traversal_result(
+                    self.network,
+                    candidate,
+                    max_traversal_distance=10,
+                )
+                await send_channel.send(result)
+
         while self.manager.is_running:
             random_content_id = NodeID(secrets.randbits(256))
             candidates = await self.network.iterative_lookup(random_content_id)
             if not candidates:
+                self.logger.debug("No candidates for introduction")
                 await trio.sleep(5)
                 continue
 
-            for node in candidates:
-                try:
-                    with trio.fail_after(INTRODUCTION_TIMEOUT):
-                        introduction_nodes = await self.network.get_introduction(node)
-                except trio.TooSlowError:
-                    continue
+            send_channel, receive_channel = trio.open_memory_channel[Tuple[SGNodeAPI, TraversalResults]](len(candidates))  # noqa: E501
 
-                if len(introduction_nodes) == 0:
-                    continue
+            async with send_channel:
+                async with trio.open_nursery() as nursery:
+                    for node in candidates:
+                        nursery.start_soon(do_get_introduction, node, send_channel)
 
-                for sg_node in introduction_nodes:
-                    self.graph_db.set(sg_node.key, sg_node)
+            async with receive_channel:
+                introduction_results = tuple([result async for result in receive_channel])
 
-                self.logger.info("Network SkipGraph initialized")
-                return NetworkGraph(self.graph_db, introduction_nodes[0], self.network)
-            else:
-                self.logger.debug(
-                    f"Failed to initialize network Skip Graph after querying "
-                    f"{len(candidates)} nodes."
+            if not introduction_results:
+                self.logger.info("Got no valid introductions")
+                await trio.sleep(5)
+                continue
+
+            best_result = sorted(
+                introduction_results,
+                key=lambda result: result.score,
+                reverse=True
+            )[0]
+
+            if best_result.score > 0.0:
+                self.logger.info(
+                    "Network SkipGraph initialized: node=%s  score=%s",
+                    best_result.node,
+                    best_result.score,
                 )
-        else:
-            raise Exception("Failed to initialize network graph")
+                return NetworkGraph(self.graph_db, best_result.node, self.network)
+            else:
+                self.logger.info(
+                    "Failed to initialize Skip Graph. All introductions were faulty: %s",
+                    tuple(str(result) for result in introduction_results),
+                )
 
     async def _initialize_skip_graph(self) -> None:
-        # 1. Get an introduction to the network's SkipGraph
-        self._network_graph = await self._initialize_network_graph()
-
-        # 2. Transfer everything from the temporary "local" SkipGraph into the
-        # network one.
-        for key in self._local_graph.db.keys():
-            self.logger.info("Migrating key from local db: %s", hex(key))
-            self.graph_queue.enqueue(key)
+        while self.manager.is_running:
             try:
-                await self.graph.insert(key)
-            except AlreadyPresent:
-                self.logger.info("Key already in database: %s", hex(key))
-            except Missing:
-                self.logger.info("Failed to insert key due to broken graph: %s", hex(key))
-            else:
-                self.logger.error("INSERTED KEY SUCCESSFULLY: %s", hex(key))
+                with trio.fail_after(2 * INTRODUCTION_TIMEOUT):
+                    # 1. Get an introduction to the network's SkipGraph
+                    self.graph = await self._initialize_network_graph()
+                break
+            except trio.TooSlowError:
+                if self.config.can_initialize_network_skip_graph:
+                    # Use a probabalistic mechanism here so that multiple
+                    # bootnodes coming online at the same time are unlikely to
+                    # try and concurrently seed the network with content.
+                    if True or secrets.randbits(256) >= self.client.local_node_id:
+                        zero_node = SGNode(0)
+                        self.graph_db.set(0, zero_node)
+                        self.graph = NetworkGraph(self.graph_db, zero_node, self.network)
+                        break
 
-        # 3. Start the Mechanic
-        self.manager.run_daemon_child_service(Mechanic(self.network, self.graph))
+        # 2. Signal that the network graph is ready
+        self._network_graph_ready.set()
 
     #
     # Request Handling: Skip Graph
@@ -277,16 +309,14 @@ class Kademlia(Service, KademliaAPI):
     async def _handle_introduction_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphGetIntroduction) as subscription:
             async for request in subscription:
-                self.logger.info("handling request: %s", request)
-                if self.graph.cursor is None:
-                    self.logger.info("Sending empty introduction")
+                self.logger.debug("handling request: %s", request)
+                if not self._network_graph_ready.is_set():
                     await self.client.send_graph_introduction(
                         request.node,
                         request_id=request.payload.request_id,
                         graph_nodes=tuple(),
                     )
                 else:
-                    self.logger.info("Sending introduction: %s", self.graph.cursor)
                     await self.client.send_graph_introduction(
                         request.node,
                         request_id=request.payload.request_id,
@@ -296,16 +326,43 @@ class Kademlia(Service, KademliaAPI):
     async def _handle_link_nodes_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
             async for request in subscription:
-                self.logger.info("handling request: %s", request)
+                self.logger.debug("handling request: %s", request)
                 # Acknowledge the request first, then do the linking.
                 await self.client.send_graph_linked(
                     request.node,
                     request_id=request.payload.request_id,
                 )
+
                 payload = request.payload
                 left_key = payload.left if payload.left is None else content_key_to_graph_key(payload.left)  # noqa: E501
                 right_key = payload.right if payload.right is None else content_key_to_graph_key(payload.right)  # noqa: E501
                 level = payload.level
+
+                if left_key is None and right_key is None:
+                    self.logger.debug("Invalid link nodes request from: %s", request.node)
+                    continue
+
+                # Validate that the keys being linked to are indeed retrievable...
+                if left_key is not None and not self.graph_db.has(left_key):
+                    try:
+                        with trio.fail_after(GET_GRAPH_NODE_TIMEOUT):
+                            await self.network.get_node(left_key)
+                    except trio.TooSlowError:
+                        self.logger.debug(
+                            "Skipping link due to unretrievable key: %s",
+                            hex(left_key),
+                        )
+                        continue
+                if right_key is not None and not self.graph_db.has(right_key):
+                    try:
+                        with trio.fail_after(GET_GRAPH_NODE_TIMEOUT):
+                            await self.network.get_node(right_key)
+                    except trio.TooSlowError:
+                        self.logger.debug(
+                            "Skipping link due to unretrievable key: %s",
+                            hex(right_key),
+                        )
+                        continue
 
                 if left_key is not None:
                     try:
@@ -314,10 +371,10 @@ class Kademlia(Service, KademliaAPI):
                         pass
                     else:
                         try:
-                            left.set_right_neighbor(level, right_key)
+                            left.set_neighbor(level, RIGHT, right_key)
                         except ValidationError as err:
                             self.logger.debug("Error updating neighbor:", exc_info=True)
-                            self.logger.info("Error updating neighbor: %s", str(err))
+                            self.logger.error("Error updating neighbor: %s", str(err))
 
                 if right_key is not None:
                     try:
@@ -326,15 +383,15 @@ class Kademlia(Service, KademliaAPI):
                         pass
                     else:
                         try:
-                            right.set_left_neighbor(level, left_key)
+                            right.set_neighbor(level, LEFT, left_key)
                         except ValidationError as err:
                             self.logger.debug("Error updating neighbor:", exc_info=True)
-                            self.logger.info("Error updating neighbor: %s", str(err))
+                            self.logger.error("Error updating neighbor: %s", str(err))
 
     async def _handle_get_graph_node_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphGetNode) as subscription:
             async for request in subscription:
-                self.logger.info("handling request: %s", request)
+                self.logger.debug("handling request: %s", request)
                 # Acknowledge the request first, then do the linking.
                 key = content_key_to_graph_key(request.payload.key)
 
@@ -454,20 +511,24 @@ class Kademlia(Service, KademliaAPI):
 
         async def do_graph_insert(key: Key) -> None:
             # Insert the key into the skip graph.
-            self.logger.info("Performing graph insertion: %s", hex(key))
             with trio.move_on_after(INSERT_TIMEOUT):
                 try:
-                    await self.graph.insert(key)
+                    sg_node = await self.graph.insert(key)
                 except AlreadyPresent:
                     pass
+                else:
+                    self.graph_db.set(key, sg_node)
 
             self.graph_queue.enqueue(key)
             semaphor.release()
+
+        await self.wait_graph_initialized()
 
         async with trio.open_nursery() as nursery:
             while self.manager.is_running:
                 key = await self.graph_queue.pop_next()
                 key_bytes = graph_key_to_content_key(key)
+
                 if not self.content_manager.has_key(key_bytes):  # noqa: W601
                     self.logger.debug(
                         'Discarding graph inserstion for key: %s',
