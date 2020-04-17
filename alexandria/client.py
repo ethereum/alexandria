@@ -9,6 +9,7 @@ from ssz import sedes
 import trio
 
 from alexandria._utils import (
+    graph_key_to_content_key,
     public_key_to_node_id,
     humanize_node_id,
     split_data_to_chunks,
@@ -48,7 +49,8 @@ from alexandria.payloads import (
     SkipGraphNode,
     GraphGetIntroduction, GraphIntroduction,
     GraphGetNode, GraphNode,
-    GraphLinkNodes, GraphLinked,
+    GraphInsert, GraphInserted,
+    GraphDelete, GraphDeleted,
 )
 from alexandria.tags import recover_source_id_from_tag
 from alexandria.typing import Key
@@ -372,48 +374,55 @@ class Client(Service, ClientAPI):
         await self.message_dispatcher.send_message(message)
         await self.events.sent_graph_node.trigger(message)
 
-    async def send_graph_link_nodes(self,
-                                    node: Node,
-                                    *,
-                                    left: Optional[Key],
-                                    right: Optional[Key],
-                                    level: int) -> int:
+    async def send_graph_insert(self,
+                                node: Node,
+                                *,
+                                key: Key) -> int:
         if node.node_id == self.local_node_id:
             raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
 
-        if left is None and right is None:
-            raise TypeError("Invalid request.  One of `left/right` must be non-null")
-
-        left_payload: Optional[bytes]
-        right_payload: Optional[bytes]
-
-        if left is None:
-            left_payload = None
-        else:
-            left_payload = int_to_big_endian(left)
-
-        if right is None:
-            right_payload = None
-        else:
-            right_payload = int_to_big_endian(right)
-
         message = Message(
-            GraphLinkNodes(request_id, left_payload, right_payload, level),
+            GraphInsert(request_id, graph_key_to_content_key(key)),
             node,
         )
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
-        await self.events.sent_graph_link_nodes.trigger(message)
+        await self.events.sent_graph_insert.trigger(message)
         return request_id
 
-    async def send_graph_linked(self, node: Node, *, request_id: int) -> None:
+    async def send_graph_inserted(self, node: Node, *, request_id: int) -> None:
         if node.node_id == self.local_node_id:
             raise ValueError("Cannot send to self")
-        message = Message(GraphLinked(request_id), node)
+        message = Message(GraphInserted(request_id), node)
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
-        await self.events.sent_graph_linked.trigger(message)
+        await self.events.sent_graph_inserted.trigger(message)
+
+    async def send_graph_delete(self,
+                                node: Node,
+                                *,
+                                key: Key) -> int:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+
+        message = Message(
+            GraphDelete(request_id, graph_key_to_content_key(key)),
+            node,
+        )
+        self.logger.debug("Sending %s", message)
+        await self.message_dispatcher.send_message(message)
+        await self.events.sent_graph_delete.trigger(message)
+        return request_id
+
+    async def send_graph_deleted(self, node: Node, *, request_id: int) -> None:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
+        message = Message(GraphDeleted(request_id), node)
+        self.logger.debug("Sending %s", message)
+        await self.message_dispatcher.send_message(message)
+        await self.events.sent_graph_deleted.trigger(message)
 
     #
     # Request/Response
@@ -479,24 +488,30 @@ class Client(Service, ClientAPI):
             await self.events.sent_graph_get_node.trigger(message)
             return await subscription.receive()
 
-    async def link_graph_nodes(self,
-                               node: Node,
-                               *,
-                               left: Optional[Key],
-                               right: Optional[Key],
-                               level: int,
-                               ) -> MessageAPI[GraphLinked]:
+    async def graph_insert(self,
+                           node: Node,
+                           *,
+                           key: Key,
+                           ) -> MessageAPI[GraphInserted]:
         if node.node_id == self.local_node_id:
             raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
-        message = Message(GraphLinkNodes(
-            request_id,
-            left=None if left is None else int_to_big_endian(left),
-            right=None if right is None else int_to_big_endian(right),
-            level=level,
-        ), node)
-        async with self.message_dispatcher.subscribe_request(message, GraphLinked) as subscription:  # noqa: E501
-            await self.events.sent_graph_link_nodes.trigger(message)
+        message = Message(GraphInsert(request_id, key), node)
+        async with self.message_dispatcher.subscribe_request(message, GraphInserted) as subscription:  # noqa: E501
+            await self.events.sent_graph_insert.trigger(message)
+            return await subscription.receive()
+
+    async def graph_delete(self,
+                           node: Node,
+                           *,
+                           key: Key,
+                           ) -> MessageAPI[GraphInserted]:
+        if node.node_id == self.local_node_id:
+            raise ValueError("Cannot send to self")
+        request_id = self.message_dispatcher.get_free_request_id(node.node_id)
+        message = Message(GraphDelete(request_id, key), node)
+        async with self.message_dispatcher.subscribe_request(message, GraphDeleted) as subscription:  # noqa: E501
+            await self.events.sent_graph_delete.trigger(message)
             return await subscription.receive()
 
     async def _do_request_with_multi_response(self,

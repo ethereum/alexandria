@@ -131,6 +131,8 @@ class MessageDispatcher(Service, MessageDispatcherAPI):
 
         send_channel, receive_channel = trio.open_memory_channel[MessageAPI[TPayload]](256)
         key = (node_id, request_id)
+        if key in self._reserved_request_ids:
+            raise Exception("Invariant")
         self._reserved_request_ids.add(key)
 
         async with trio.open_nursery() as nursery:

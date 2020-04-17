@@ -199,6 +199,35 @@ class Network(NetworkAPI):
         )
         return sorted_found_nodes
 
+    async def locations(self, key: bytes) -> Tuple[Node, ...]:
+        content_id = content_key_to_node_id(key)
+
+        send_channel, receive_channel = trio.open_memory_channel[Node](0)
+
+        async def do_get_locations(node: Node) -> None:
+            try:
+                with trio.fail_after(LOCATE_TIMEOUT):
+                    locations = await self.locate(node, key=content_id)
+            except trio.TooSlowError:
+                self.logger.debug(
+                    "Timeout getting locations: node=%s  content_id=%s",
+                    node,
+                    content_id,
+                )
+            else:
+                for location in locations:
+                    await send_channel.send(location)
+
+        with send_channel:
+            async with trio.open_nursery() as nursery:
+                for node in await self.iterative_lookup(content_id):
+                    nursery.start_soon(do_get_locations, node)
+                with receive_channel:
+                    return tuple(set([
+                        location async for location in receive_channel
+                        if location.node_id != self.client.local_node_id
+                    ]))
+
     #
     # Content Management
     #
@@ -279,9 +308,6 @@ class Network(NetworkAPI):
                        filter_fn: Optional[Callable[[SGNodeAPI], bool]] = None,
                        ) -> SGNodeAPI:
         content_key = graph_key_to_content_key(key)
-        content_id = content_key_to_node_id(content_key)
-        nodes_near_content = await self.iterative_lookup(content_id)
-        queried: Set[NodeID] = set()
 
         send_channel, receive_channel = trio.open_memory_channel[SGNodeAPI](0)
 
@@ -305,76 +331,39 @@ class Network(NetworkAPI):
             else:
                 self.logger.info("Discarding retrieved node that failed filter function: %s", node)
 
-        async def do_get_locations(nursery: trio.Nursery, node: Node):
-            try:
-                with trio.fail_after(LOCATE_TIMEOUT):
-                    locations = await self.locate(node, key=content_key)
-            except trio.TooSlowError:
-                self.logger.debug(
-                    "Timed out looking up locations: node=%s  content-key=%s",
-                    node,
-                    content_key,
-                )
-                return
-
+        async with trio.open_nursery() as nursery:
+            locations = await self.locations(content_key)
             for location in locations:
-                if location.node_id in queried:
-                    continue
-                elif location.node_id == self.client.local_node_id:
-                    continue
-                queried.add(location.node_id)
                 nursery.start_soon(do_get_node, location)
 
-        async with trio.open_nursery() as nursery:
-            for node in nodes_near_content:
-                nursery.start_soon(do_get_locations, nursery, node)
+            async with receive_channel:
+                return await receive_channel.receive()
 
-            try:
-                with trio.fail_after(2 * GET_GRAPH_NODE_TIMEOUT):
-                    async with receive_channel:
-                        return await receive_channel.receive()
-            except trio.TooSlowError:
-                raise NotFound(
-                    f"Could not find node after querying {len(queried)} "
-                    f"locations provided by {len(nodes_near_content)} nodes"
-                )
-            finally:
-                nursery.cancel_scope.cancel()
-
-    async def link_nodes(self,
-                         left: Optional[Key],
-                         right: Optional[Key],
-                         level: int) -> None:
-        if left is None and right is None:
-            raise TypeError("Invalid: one key must be non-null")
-
-        updated: Set[NodeID] = set()
-
-        async def do_link(location: Node) -> None:
+    async def insert(self, key: Optional[Key]) -> None:
+        async def do_insert(location: Node) -> None:
             with trio.move_on_after(LINK_TIMEOUT):
-                await self.client.send_graph_link_nodes(
-                    location,
-                    left=left,
-                    right=right,
-                    level=level,
-                )
+                await self.client.graph_insert(location, key=key)
+
+        content_key = graph_key_to_content_key(key)
+
+        locations = await self.locations(content_key)
 
         async with trio.open_nursery() as nursery:
-            for key in (left, right):
-                if key is None:
-                    continue
-                content_key = graph_key_to_content_key(key)
-                content_id = content_key_to_node_id(content_key)
-                for node in await self.iterative_lookup(content_id):
+            for location in locations:
+                nursery.start_soon(do_insert, location)
 
-                    content_locations = await self.locate(node, key=content_key)
-                    for location in content_locations:
-                        if location.node_id in updated:
-                            continue
-                        if location.node_id == self.client.local_node_id:
-                            continue
-                        updated.add(location.node_id)
-                        nursery.start_soon(do_link, location)
+    async def delete(self, key: Optional[Key]) -> None:
+        async def do_delete(location: Node) -> None:
+            with trio.move_on_after(LINK_TIMEOUT):
+                await self.client.graph_delete(location, key=key)
+
+        content_key = graph_key_to_content_key(key)
+
+        locations = await self.locations(content_key)
+
+        async with trio.open_nursery() as nursery:
+            for location in locations:
+                nursery.start_soon(do_delete, location)
 
 
 def iter_closest_nodes(target: NodeID,

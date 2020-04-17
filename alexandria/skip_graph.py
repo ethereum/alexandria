@@ -105,7 +105,7 @@ class SGNode(SGNodeAPI):
 
         if key is not None and not direction.comparison_fn(key, self.key):
             raise ValidationError(
-                "Invalid {direction.name} neighbor: key={hex(self.key)}  neighbor={hex(key)}"
+                f"Invalid {direction.name} neighbor: key={hex(self.key)}  neighbor={hex(key)}"
             )
 
         if key is None:

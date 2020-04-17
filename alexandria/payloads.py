@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, TYPE_CHECKING
+from typing import Tuple, TYPE_CHECKING
 
 from ssz import sedes
 
@@ -209,21 +209,35 @@ class GraphNode(sedes.Serializable):  # type: ignore
     node: SkipGraphNode
 
 
-class GraphLinkNodes(sedes.Serializable):  # type: ignore
+class GraphInsert(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
-        ("left", Maybe(byte_list)),
-        ("right", Maybe(byte_list)),
-        ("level", sedes.uint8),
+        ("key", byte_list),
     )
 
     request_id: int
-    left: Optional[bytes]
-    right: Optional[bytes]
-    level: int
+    key: bytes
 
 
-class GraphLinked(sedes.Serializable):  # type: ignore
+class GraphInserted(sedes.Serializable):  # type: ignore
+    fields = (
+        ("request_id", sedes.uint16),
+    )
+
+    request_id: int
+
+
+class GraphDelete(sedes.Serializable):  # type: ignore
+    fields = (
+        ("request_id", sedes.uint16),
+        ("key", byte_list),
+    )
+
+    request_id: int
+    key: bytes
+
+
+class GraphDeleted(sedes.Serializable):  # type: ignore
     fields = (
         ("request_id", sedes.uint16),
     )

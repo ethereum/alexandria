@@ -11,7 +11,8 @@ from alexandria.payloads import (
     Retrieve, Chunk,
     GraphGetIntroduction, GraphIntroduction,
     GraphGetNode, GraphNode,
-    GraphLinkNodes, GraphLinked,
+    GraphInsert, GraphInserted,
+    GraphDelete, GraphDeleted,
 )
 
 
@@ -60,5 +61,7 @@ default_registry.register(10, GraphGetIntroduction)
 default_registry.register(11, GraphIntroduction)
 default_registry.register(12, GraphGetNode)
 default_registry.register(13, GraphNode)
-default_registry.register(14, GraphLinkNodes)
-default_registry.register(15, GraphLinked)
+default_registry.register(14, GraphInsert)
+default_registry.register(15, GraphInserted)
+default_registry.register(16, GraphDelete)
+default_registry.register(17, GraphDeleted)

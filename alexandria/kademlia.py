@@ -6,7 +6,6 @@ from async_service import Service
 from eth_utils import (
     encode_hex,
     to_tuple,
-    ValidationError,
 )
 import trio
 
@@ -37,7 +36,6 @@ from alexandria.constants import (
     KADEMLIA_ANNOUNCE_CONCURRENCY,
     INTRODUCTION_TIMEOUT,
     INSERT_TIMEOUT,
-    GET_GRAPH_NODE_TIMEOUT,
     LINK_TIMEOUT,
 )
 from alexandria.content_manager import ContentManager
@@ -50,7 +48,8 @@ from alexandria.payloads import (
     Retrieve,
     GraphGetIntroduction,
     GraphGetNode,
-    GraphLinkNodes,
+    GraphInsert,
+    GraphDelete,
 )
 from alexandria.routing_table import compute_distance
 from alexandria.skip_graph import (
@@ -326,70 +325,43 @@ class Kademlia(Service, KademliaAPI):
                         graph_nodes=(self.graph.cursor,),
                     )
 
-    async def _handle_link_nodes_requests(self) -> None:
-        async with self.client.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
+    async def _handle_insert_requests(self) -> None:
+        async with self.client.message_dispatcher.subscribe(GraphInsert) as subscription:
             async for request in subscription:
                 self.logger.debug("handling request: %s", request)
                 # Acknowledge the request first, then do the linking.
-                await self.client.send_graph_linked(
+                await self.client.send_graph_inserted(
                     request.node,
                     request_id=request.payload.request_id,
                 )
-
-                payload = request.payload
-                left_key = payload.left if payload.left is None else content_key_to_graph_key(payload.left)  # noqa: E501
-                right_key = payload.right if payload.right is None else content_key_to_graph_key(payload.right)  # noqa: E501
-                level = payload.level
-
-                if left_key is None and right_key is None:
-                    self.logger.debug("Invalid link nodes request from: %s", request.node)
+                if not self._network_graph_ready.is_set():
                     continue
 
-                # Validate that the keys being linked to are indeed retrievable...
-                if left_key is not None and not self.graph_db.has(left_key):
-                    try:
-                        with trio.fail_after(GET_GRAPH_NODE_TIMEOUT):
-                            await self.network.get_node(left_key)
-                    except trio.TooSlowError:
-                        self.logger.debug(
-                            "Skipping link due to unretrievable key: %s",
-                            hex(left_key),
-                        )
-                        continue
-                if right_key is not None and not self.graph_db.has(right_key):
-                    try:
-                        with trio.fail_after(GET_GRAPH_NODE_TIMEOUT):
-                            await self.network.get_node(right_key)
-                    except trio.TooSlowError:
-                        self.logger.debug(
-                            "Skipping link due to unretrievable key: %s",
-                            hex(right_key),
-                        )
-                        continue
+                key = content_key_to_graph_key(request.payload.key)
+                try:
+                    await self.graph.insert(key)
+                except Exception:
+                    self.logger.exception("Error inserting key: %s", key)
+                    continue
 
-                if left_key is not None:
-                    try:
-                        left = self.graph_db.get(left_key)
-                    except KeyError:
-                        pass
-                    else:
-                        try:
-                            left.set_neighbor(level, RIGHT, right_key)
-                        except ValidationError as err:
-                            self.logger.debug("Error updating neighbor:", exc_info=True)
-                            self.logger.error("Error updating neighbor: %s", str(err))
+    async def _handle_delete_requests(self) -> None:
+        async with self.client.message_dispatcher.subscribe(GraphDelete) as subscription:
+            async for request in subscription:
+                self.logger.debug("handling request: %s", request)
+                # Acknowledge the request first, then do the linking.
+                await self.client.send_graph_deleted(
+                    request.node,
+                    request_id=request.payload.request_id,
+                )
+                if not self._network_graph_ready.is_set():
+                    continue
 
-                if right_key is not None:
-                    try:
-                        right = self.graph_db.get(right_key)
-                    except KeyError:
-                        pass
-                    else:
-                        try:
-                            right.set_neighbor(level, LEFT, left_key)
-                        except ValidationError as err:
-                            self.logger.debug("Error updating neighbor:", exc_info=True)
-                            self.logger.error("Error updating neighbor: %s", str(err))
+                key = content_key_to_graph_key(request.payload.key)
+                try:
+                    await self.graph.delete(key)
+                except Exception:
+                    self.logger.exception("Error deleteing key: %s", key)
+                    continue
 
     async def _handle_get_graph_node_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphGetNode) as subscription:

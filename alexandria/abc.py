@@ -41,7 +41,8 @@ from alexandria.payloads import (
     Ping, Pong,
     GraphGetIntroduction, GraphIntroduction,
     GraphGetNode, GraphNode,
-    GraphLinkNodes, GraphLinked,
+    GraphInsert, GraphInserted,
+    GraphDelete, GraphDeleted,
 )
 from alexandria.typing import Key, AES128Key, NodeID, Tag
 
@@ -328,8 +329,11 @@ class EventsAPI(ABC):
     sent_graph_get_node: EventAPI[MessageAPI[GraphGetNode]]
     sent_graph_node: EventAPI[MessageAPI[GraphNode]]
 
-    sent_graph_link_nodes: EventAPI[MessageAPI[GraphLinkNodes]]
-    sent_graph_linked: EventAPI[MessageAPI[GraphLinked]]
+    self.sent_graph_insert: EventAPI[MessageAPI[GraphInsert]]
+    self.sent_graph_inserted: EventAPI[MessageAPI[GraphInserted]]
+
+    self.sent_graph_delete: EventAPI[MessageAPI[GraphDelete]]
+    self.sent_graph_deleted: EventAPI[MessageAPI[GraphDeleted]]
 
 
 class MessageDispatcherAPI(ServiceAPI):
@@ -524,16 +528,25 @@ class ClientAPI(ServiceAPI):
         ...
 
     @abstractmethod
-    async def send_graph_link_nodes(self,
-                                    node: Node,
-                                    *,
-                                    left: Optional[Key],
-                                    right: Optional[Key],
-                                    level: int) -> int:
+    async def send_graph_insert(self,
+                                node: Node,
+                                *,
+                                key: Key) -> int:
         ...
 
     @abstractmethod
-    async def send_graph_linked(self, node: Node, *, request_id: int) -> None:
+    async def send_graph_inserted(self, node: Node, *, request_id: int) -> None:
+        ...
+
+    @abstractmethod
+    async def send_graph_delete(self,
+                                node: Node,
+                                *,
+                                key: Key) -> int:
+        ...
+
+    @abstractmethod
+    async def send_graph_deleted(self, node: Node, *, request_id: int) -> None:
         ...
 
     #
@@ -568,13 +581,19 @@ class ClientAPI(ServiceAPI):
         ...
 
     @abstractmethod
-    async def link_graph_nodes(self,
-                               node: Node,
-                               *,
-                               left: Optional[Key],
-                               right: Optional[Key],
-                               level: int,
-                               ) -> MessageAPI[GraphLinked]:
+    async def graph_insert(self,
+                           node: Node,
+                           *,
+                           key: Key,
+                           ) -> MessageAPI[GraphInserted]:
+        ...
+
+    @abstractmethod
+    async def graph_delete(self,
+                           node: Node,
+                           *,
+                           key: Key,
+                           ) -> MessageAPI[GraphDeleted]:
         ...
 
 

@@ -21,7 +21,8 @@ from alexandria.payloads import (
     Ping, Pong,
     GraphGetIntroduction, GraphIntroduction,
     GraphGetNode, GraphNode,
-    GraphLinkNodes, GraphLinked,
+    GraphInsert, GraphInserted,
+    GraphDelete, GraphDeleted,
 )
 
 
@@ -107,5 +108,8 @@ class Events(EventsAPI):
         self.sent_graph_get_node: EventAPI[MessageAPI[GraphGetNode]] = Event('sent-GraphGetNode')
         self.sent_graph_node: EventAPI[MessageAPI[GraphNode]] = Event('sent-GraphNode')
 
-        self.sent_graph_link_nodes: EventAPI[MessageAPI[GraphLinkNodes]] = Event('sent-GraphLinkNodes')  # noqa: E501
-        self.sent_graph_linked: EventAPI[MessageAPI[GraphLinked]] = Event('sent-GraphLinked')
+        self.sent_graph_insert: EventAPI[MessageAPI[GraphInsert]] = Event('sent-GraphInsert')  # noqa: E501
+        self.sent_graph_inserted: EventAPI[MessageAPI[GraphInserted]] = Event('sent-GraphInserted')
+
+        self.sent_graph_delete: EventAPI[MessageAPI[GraphDelete]] = Event('sent-GraphDelete')  # noqa: E501
+        self.sent_graph_deleted: EventAPI[MessageAPI[GraphDeleted]] = Event('sent-GraphDeleted')
