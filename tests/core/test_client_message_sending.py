@@ -1,6 +1,7 @@
 import pytest
 import trio
 
+from alexandria._utils import content_key_to_graph_key
 from alexandria.skip_graph import SGNode
 from alexandria.payloads import (
     Advertise, Ack,
@@ -10,7 +11,8 @@ from alexandria.payloads import (
     Retrieve, Chunk,
     GraphGetIntroduction, GraphIntroduction,
     GraphGetNode, GraphNode,
-    GraphLinkNodes, GraphLinked,
+    GraphInsert, GraphInserted,
+    GraphDelete, GraphDeleted,
 )
 
 
@@ -229,12 +231,12 @@ async def test_client_send_graph_introduction(alice_and_bob_clients):
         node_5, node_7 = payload.nodes[0].to_sg_node(), payload.nodes[1].to_sg_node()
 
         assert node_5.key == 5
-        assert node_5.neighbors_left == [3, 2]
-        assert node_5.neighbors_right == [7, 9]
+        assert node_5.neighbors[0] == [3, 2]
+        assert node_5.neighbors[1] == [7, 9]
 
         assert node_7.key == 7
-        assert node_7.neighbors_left == [5]
-        assert node_7.neighbors_right == [9]
+        assert node_7.neighbors[0] == [5]
+        assert node_7.neighbors[1] == [9]
 
 
 @pytest.mark.trio
@@ -276,8 +278,8 @@ async def test_client_send_graph_node(alice_and_bob_clients):
         node = payload.node.to_sg_node()
 
         assert node.key == 5
-        assert node.neighbors_left == [3, 2]
-        assert node.neighbors_right == [7, 9]
+        assert node.neighbors[0] == [3, 2]
+        assert node.neighbors[1] == [7, 9]
 
 
 @pytest.mark.trio
@@ -302,15 +304,13 @@ async def test_client_send_graph_node_null(alice_and_bob_clients):
 
 
 @pytest.mark.trio
-async def test_client_send_graph_link_nodes(alice_and_bob_clients):
+async def test_client_send_graph_insert(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    async with bob.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
-        request_id = await alice.send_graph_link_nodes(
+    async with bob.message_dispatcher.subscribe(GraphInsert) as subscription:
+        request_id = await alice.send_graph_insert(
             bob.local_node,
-            left=5,
-            right=7,
-            level=0,
+            key=content_key_to_graph_key(b'key'),
         )
 
         with trio.fail_after(1):
@@ -318,67 +318,17 @@ async def test_client_send_graph_link_nodes(alice_and_bob_clients):
 
         assert message.node == alice.local_node
         payload = message.payload
-        assert isinstance(payload, GraphLinkNodes)
+        assert isinstance(payload, GraphInsert)
         assert payload.request_id == request_id
-        assert payload.left == b'\x05'
-        assert payload.right == b'\x07'
-        assert payload.level == 0
+        assert payload.key == b'key'
 
 
 @pytest.mark.trio
-async def test_client_send_graph_link_nodes_left_null(alice_and_bob_clients):
+async def test_client_send_graph_inserted(alice_and_bob_clients):
     alice, bob = alice_and_bob_clients
 
-    async with bob.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
-        request_id = await alice.send_graph_link_nodes(
-            bob.local_node,
-            left=None,
-            right=7,
-            level=0,
-        )
-
-        with trio.fail_after(1):
-            message = await subscription.receive()
-
-        assert message.node == alice.local_node
-        payload = message.payload
-        assert isinstance(payload, GraphLinkNodes)
-        assert payload.request_id == request_id
-        assert payload.left is None
-        assert payload.right == b'\x07'
-        assert payload.level == 0
-
-
-@pytest.mark.trio
-async def test_client_send_graph_link_nodes_right_null(alice_and_bob_clients):
-    alice, bob = alice_and_bob_clients
-
-    async with bob.message_dispatcher.subscribe(GraphLinkNodes) as subscription:
-        request_id = await alice.send_graph_link_nodes(
-            bob.local_node,
-            left=5,
-            right=None,
-            level=0,
-        )
-
-        with trio.fail_after(1):
-            message = await subscription.receive()
-
-        assert message.node == alice.local_node
-        payload = message.payload
-        assert isinstance(payload, GraphLinkNodes)
-        assert payload.request_id == request_id
-        assert payload.left == b'\x05'
-        assert payload.right is None
-        assert payload.level == 0
-
-
-@pytest.mark.trio
-async def test_client_send_graph_linked(alice_and_bob_clients):
-    alice, bob = alice_and_bob_clients
-
-    async with bob.message_dispatcher.subscribe(GraphLinked) as subscription:
-        await alice.send_graph_linked(
+    async with bob.message_dispatcher.subscribe(GraphInserted) as subscription:
+        await alice.send_graph_inserted(
             bob.local_node,
             request_id=1234,
         )
@@ -388,5 +338,44 @@ async def test_client_send_graph_linked(alice_and_bob_clients):
 
         assert message.node == alice.local_node
         payload = message.payload
-        assert isinstance(payload, GraphLinked)
+        assert isinstance(payload, GraphInserted)
+        assert payload.request_id == 1234
+
+
+@pytest.mark.trio
+async def test_client_send_graph_delete(alice_and_bob_clients):
+    alice, bob = alice_and_bob_clients
+
+    async with bob.message_dispatcher.subscribe(GraphDelete) as subscription:
+        request_id = await alice.send_graph_delete(
+            bob.local_node,
+            key=content_key_to_graph_key(b'key'),
+        )
+
+        with trio.fail_after(1):
+            message = await subscription.receive()
+
+        assert message.node == alice.local_node
+        payload = message.payload
+        assert isinstance(payload, GraphDelete)
+        assert payload.request_id == request_id
+        assert payload.key == b'key'
+
+
+@pytest.mark.trio
+async def test_client_send_graph_deleted(alice_and_bob_clients):
+    alice, bob = alice_and_bob_clients
+
+    async with bob.message_dispatcher.subscribe(GraphDeleted) as subscription:
+        await alice.send_graph_deleted(
+            bob.local_node,
+            request_id=1234,
+        )
+
+        with trio.fail_after(1):
+            message = await subscription.receive()
+
+        assert message.node == alice.local_node
+        payload = message.payload
+        assert isinstance(payload, GraphDeleted)
         assert payload.request_id == 1234

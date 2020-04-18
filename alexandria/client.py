@@ -3,7 +3,7 @@ from typing import Collection, Optional, Tuple, Type
 
 from async_service import Service, background_trio_service
 from eth_keys import keys
-from eth_utils import ValidationError, int_to_big_endian
+from eth_utils import ValidationError
 from eth_utils.toolz import partition_all
 from ssz import sedes
 import trio
@@ -351,7 +351,7 @@ class Client(Service, ClientAPI):
         if node.node_id == self.local_node_id:
             raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
-        message = Message(GraphGetNode(request_id, int_to_big_endian(key)), node)
+        message = Message(GraphGetNode(request_id, graph_key_to_content_key(key)), node)
         self.logger.debug("Sending %s", message)
         await self.message_dispatcher.send_message(message)
         await self.events.sent_graph_get_node.trigger(message)
@@ -483,7 +483,7 @@ class Client(Service, ClientAPI):
         if node.node_id == self.local_node_id:
             raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
-        message = Message(GraphGetNode(request_id, int_to_big_endian(key)), node)
+        message = Message(GraphGetNode(request_id, graph_key_to_content_key(key)), node)
         async with self.message_dispatcher.subscribe_request(message, GraphNode) as subscription:  # noqa: E501
             await self.events.sent_graph_get_node.trigger(message)
             return await subscription.receive()
@@ -496,7 +496,7 @@ class Client(Service, ClientAPI):
         if node.node_id == self.local_node_id:
             raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
-        message = Message(GraphInsert(request_id, key), node)
+        message = Message(GraphInsert(request_id, graph_key_to_content_key(key)), node)
         async with self.message_dispatcher.subscribe_request(message, GraphInserted) as subscription:  # noqa: E501
             await self.events.sent_graph_insert.trigger(message)
             return await subscription.receive()
@@ -509,7 +509,7 @@ class Client(Service, ClientAPI):
         if node.node_id == self.local_node_id:
             raise ValueError("Cannot send to self")
         request_id = self.message_dispatcher.get_free_request_id(node.node_id)
-        message = Message(GraphDelete(request_id, key), node)
+        message = Message(GraphDelete(request_id, graph_key_to_content_key(key)), node)
         async with self.message_dispatcher.subscribe_request(message, GraphDeleted) as subscription:  # noqa: E501
             await self.events.sent_graph_delete.trigger(message)
             return await subscription.receive()

@@ -5,7 +5,6 @@ import random
 from eth_utils.toolz import accumulate
 
 from alexandria._utils import content_key_to_node_id
-from alexandria.abc import Content
 from alexandria.content_manager import EphemeralDB
 from alexandria.routing_table import compute_distance
 
@@ -26,31 +25,34 @@ def test_ephemeral_db_basics():
         key=lambda key: compute_distance(center_id, content_key_to_node_id(key)),
     ))
 
-    db = EphemeralDB(0, capacity=20)
+    db = EphemeralDB(
+        capacity=20,
+        distance_fn=lambda key: compute_distance(center_id, content_key_to_node_id(key)),
+    )
     assert db.has_capacity
     # first key fills the whole database... and is immediately evicted.
-    db.set(Content(key_e, b'0' * 21))
+    db.set(key_e, b'0' * 21)
     assert db.has_capacity
     assert not db.has(key_e)
 
     # now get the database at to capacity
-    db.set(Content(key_a, b'0' * 10))
-    db.set(Content(key_c, b'0' * 10))
+    db.set(key_a, b'0' * 10)
+    db.set(key_c, b'0' * 10)
     assert not db.has_capacity
     assert db.capacity == 0
     assert db.has(key_a)
     assert db.has(key_c)
 
     # reinsertion of either key should not change things
-    db.set(Content(key_a, b'0' * 10))
-    db.set(Content(key_c, b'0' * 10))
+    db.set(key_a, b'0' * 10)
+    db.set(key_c, b'0' * 10)
     assert not db.has_capacity
     assert db.capacity == 0
     assert db.has(key_a)
     assert db.has(key_c)
 
     # inserting a key that is further away will be immediately evicted (no change)
-    db.set(Content(key_d, b'0'))
+    db.set(key_d, b'0')
     assert not db.has(key_d)
     assert not db.has_capacity
     assert db.capacity == 0
@@ -58,7 +60,7 @@ def test_ephemeral_db_basics():
     assert db.has(key_c)
 
     # inserting a closer key will evict the furthest key
-    db.set(Content(key_b, b'0'))
+    db.set(key_b, b'0')
     assert not db.has(key_c)  # should be evicted
     assert db.has(key_a)
     assert db.has(key_b)
@@ -92,10 +94,13 @@ def test_ephemeral_db_fuzz(capacity):
     expected_evicted_keys = sorted_keys[cutoff_index:]
 
     random.shuffle(items)
-    db = EphemeralDB(0, capacity=capacity)
+    db = EphemeralDB(
+        capacity=capacity,
+        distance_fn=lambda key: compute_distance(center_id, content_key_to_node_id(key)),
+    )
 
     for key, value in items:
-        db.set(Content(key, value))
+        db.set(key, value)
 
     for key in expected_keys:
         assert db.has(key)

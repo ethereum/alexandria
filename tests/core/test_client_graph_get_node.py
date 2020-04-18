@@ -32,8 +32,8 @@ async def test_client_get_graph_node(alice_and_bob_clients):
 
             node = message.payload.node.to_sg_node()
             assert node.key == 5
-            assert node.neighbors_left == [3, 0]
-            assert node.neighbors_right == [7, 9]
+            assert node.neighbors[0] == [3, 0]
+            assert node.neighbors[1] == [7, 9]
 
 
 @pytest.mark.trio

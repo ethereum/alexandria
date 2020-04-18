@@ -253,7 +253,7 @@ class BaseGraph(GraphAPI):
         if not self.has_cursor:
             raise Exception("No database cursor")
 
-        async with self.lock:
+        async with self._lock:
             self.logger.debug('Deleting: %d', key)
             node = await self.search(key)
 
@@ -528,6 +528,8 @@ class TraversalResult:
 
     @property
     def is_faulty(self) -> bool:
+        if not self._traversal_result:
+            return False
         return any(_ends_with_fault(result) for result in itertools.chain(*self._traversal_result))
 
     @property
@@ -542,8 +544,6 @@ class TraversalResult:
 
     @property
     def fault_ratio(self) -> float:
-        if not self._traversal_result:
-            return 1.0
         num_faults = len(tuple(
             traversal_result for traversal_result in itertools.chain(*self._traversal_result)
             if _ends_with_fault(traversal_result)

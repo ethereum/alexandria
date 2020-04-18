@@ -329,11 +329,11 @@ class EventsAPI(ABC):
     sent_graph_get_node: EventAPI[MessageAPI[GraphGetNode]]
     sent_graph_node: EventAPI[MessageAPI[GraphNode]]
 
-    self.sent_graph_insert: EventAPI[MessageAPI[GraphInsert]]
-    self.sent_graph_inserted: EventAPI[MessageAPI[GraphInserted]]
+    sent_graph_insert: EventAPI[MessageAPI[GraphInsert]]
+    sent_graph_inserted: EventAPI[MessageAPI[GraphInserted]]
 
-    self.sent_graph_delete: EventAPI[MessageAPI[GraphDelete]]
-    self.sent_graph_deleted: EventAPI[MessageAPI[GraphDeleted]]
+    sent_graph_delete: EventAPI[MessageAPI[GraphDelete]]
+    sent_graph_deleted: EventAPI[MessageAPI[GraphDeleted]]
 
 
 class MessageDispatcherAPI(ServiceAPI):
@@ -673,6 +673,10 @@ class NetworkAPI(ABC):
         ...
 
     @abstractmethod
+    async def locations(self, key: bytes) -> Tuple[Node, ...]:
+        ...
+
+    @abstractmethod
     async def verify_and_add(self, node: Node) -> None:
         ...
 
@@ -712,10 +716,11 @@ class NetworkAPI(ABC):
         ...
 
     @abstractmethod
-    async def link_nodes(self,
-                         left: Optional[Key],
-                         right: Optional[Key],
-                         level: int) -> None:
+    async def insert(self, key: Key) -> None:
+        ...
+
+    @abstractmethod
+    async def delete(self, key: Key) -> None:
         ...
 
 

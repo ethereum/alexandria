@@ -204,29 +204,32 @@ class Network(NetworkAPI):
 
         send_channel, receive_channel = trio.open_memory_channel[Node](0)
 
-        async def do_get_locations(node: Node) -> None:
-            try:
-                with trio.fail_after(LOCATE_TIMEOUT):
-                    locations = await self.locate(node, key=content_id)
-            except trio.TooSlowError:
-                self.logger.debug(
-                    "Timeout getting locations: node=%s  content_id=%s",
-                    node,
-                    content_id,
-                )
-            else:
-                for location in locations:
-                    await send_channel.send(location)
+        async def do_get_locations(node: Node,
+                                   send_channel: trio.abc.SendChannel[Node]) -> None:
+            async with send_channel:
+                try:
+                    with trio.fail_after(LOCATE_TIMEOUT):
+                        locations = await self.locate(node, key=key)
+                except trio.TooSlowError:
+                    self.logger.debug(
+                        "Timeout getting locations: node=%s  key=%r",
+                        node,
+                        key,
+                    )
+                else:
+                    for location in locations:
+                        await send_channel.send(location)
 
-        with send_channel:
-            async with trio.open_nursery() as nursery:
+        async with trio.open_nursery() as nursery:
+            async with send_channel:
                 for node in await self.iterative_lookup(content_id):
-                    nursery.start_soon(do_get_locations, node)
-                with receive_channel:
-                    return tuple(set([
-                        location async for location in receive_channel
-                        if location.node_id != self.client.local_node_id
-                    ]))
+                    nursery.start_soon(do_get_locations, node, send_channel.clone())
+
+            async with receive_channel:
+                return tuple(set([
+                    location async for location in receive_channel
+                    if location.node_id != self.client.local_node_id
+                ]))
 
     #
     # Content Management
@@ -339,7 +342,7 @@ class Network(NetworkAPI):
             async with receive_channel:
                 return await receive_channel.receive()
 
-    async def insert(self, key: Optional[Key]) -> None:
+    async def insert(self, key: Key) -> None:
         async def do_insert(location: Node) -> None:
             with trio.move_on_after(LINK_TIMEOUT):
                 await self.client.graph_insert(location, key=key)
@@ -352,7 +355,7 @@ class Network(NetworkAPI):
             for location in locations:
                 nursery.start_soon(do_insert, location)
 
-    async def delete(self, key: Optional[Key]) -> None:
+    async def delete(self, key: Key) -> None:
         async def do_delete(location: Node) -> None:
             with trio.move_on_after(LINK_TIMEOUT):
                 await self.client.graph_delete(location, key=key)
