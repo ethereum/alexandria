@@ -80,7 +80,7 @@ async def test_application(bootnode, base_db_path):
     )
 
     async with AsyncExitStack() as stack:
-        for i in range(2):
+        for i in range(1):
             # small delay between starting each client.
             await trio.sleep(random.random())
             # content database

@@ -314,7 +314,6 @@ class Kademlia(Service, KademliaAPI):
             async for request in subscription:
                 self.logger.debug("handling request: %s", request)
                 if not self._network_graph_ready.is_set():
-                    self.logger.error("%s: Sending empty introduction", request)
                     await self.client.send_graph_introduction(
                         request.node,
                         request_id=request.payload.request_id,
@@ -376,6 +375,7 @@ class Kademlia(Service, KademliaAPI):
 
                 sg_node: Optional[SGNodeAPI]
                 try:
+                    self.logger.info("Responding with key: %s", key)
                     sg_node = self.graph_db.get(key)
                 except KeyError:
                     self.logger.info("Unknown key: %s", key)
