@@ -378,6 +378,7 @@ class Kademlia(Service, KademliaAPI):
                 try:
                     sg_node = self.graph_db.get(key)
                 except KeyError:
+                    self.logger.info("Unknown key: %s", key)
                     sg_node = None
 
                 await self.client.send_graph_node(

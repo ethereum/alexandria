@@ -8,7 +8,6 @@ from typing import (
     KeysView,
     Optional,
     Sequence,
-    Set,
     Tuple,
 )
 
@@ -26,7 +25,7 @@ from alexandria.abc import (
     Node,
 )
 from alexandria.constants import GET_GRAPH_NODE_TIMEOUT
-from alexandria.typing import Key, NodeID
+from alexandria.typing import Key
 
 
 class NotFound(Exception):
@@ -637,13 +636,10 @@ async def scan_level(network: NetworkAPI,
 async def get_node_versions(network: NetworkAPI,
                             key: Key) -> Tuple[SGNodeAPI, ...]:
     content_key = graph_key_to_content_key(key)
-    content_id = content_key_to_node_id(content_key)
-    nodes_near_content = await network.iterative_lookup(content_id)
-    queried: Set[NodeID] = set()
 
     send_channel, receive_channel = trio.open_memory_channel[SGNodeAPI](2048)  # too big...
 
-    async def do_get_graph_node(location: Node):
+    async def do_get_graph_node(location: Node, send_channel: trio.abc.SendChannel[Node]):
         if location.node_id == network.client.local_node_id:
             return
         with trio.move_on_after(GET_GRAPH_NODE_TIMEOUT):
@@ -652,19 +648,15 @@ async def get_node_versions(network: NetworkAPI,
             except NotFound:
                 pass
             else:
-                await send_channel.send(node)
+                async with send_channel:
+                    await send_channel.send(node)
 
-    async with send_channel:
-        async with trio.open_nursery() as nursery:
-            for node in nodes_near_content:
-                location_candidates = await network.locate(node, key=content_key)
-                for location in location_candidates:
-                    if location.node_id in queried:
-                        continue
-                    queried.add(location.node_id)
-                    nursery.start_soon(do_get_graph_node, location)
+    async with trio.open_nursery() as nursery:
+        async with send_channel:
+            for location in await network.locations(content_key):
+                nursery.start_soon(do_get_graph_node, location, send_channel.clone())
 
-    async with receive_channel:
-        nodes = tuple([node async for node in receive_channel])
+        async with receive_channel:
+            nodes = tuple([node async for node in receive_channel])
 
     return nodes
