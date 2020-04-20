@@ -15,7 +15,7 @@ from alexandria._utils import sha256, every
 from alexandria.abc import Endpoint, Node, DurableDatabaseAPI
 from alexandria.app import Application
 from alexandria.cli_parser import parser
-from alexandria.config import DEFAULT_CONFIG, KademliaConfig
+from alexandria.config import KademliaConfig
 from alexandria.durable_db import DurableDB
 from alexandria.logging import setup_logging
 from alexandria.metrics import Metrics
@@ -152,12 +152,14 @@ async def main() -> None:
     else:
         metrics_args = None
 
+    config = KademliaConfig.from_args(args)
+
     alexandria = Alexandria(
         private_key=private_key,
         listen_on=listen_on,
         bootnodes=bootnodes,
         durable_db=durable_db,
-        kademlia_config=DEFAULT_CONFIG,
+        kademlia_config=config,
         ipc_path=ipc_path,
         metrics_args=metrics_args,
     )
