@@ -9,8 +9,6 @@ parser = argparse.ArgumentParser(description='Alexandria')
 #
 # subparser for sub commands
 #
-# Components may add subcommands with a `func` attribute
-# to gain control over the main Trinity process
 subparser = parser.add_subparsers(dest='subcommand')
 
 #
@@ -19,10 +17,12 @@ subparser = parser.add_subparsers(dest='subcommand')
 alexandria_parser = parser.add_argument_group('core')
 logging_parser = parser.add_argument_group('logging')
 network_parser = parser.add_argument_group('network')
+kademlia_parser = parser.add_argument_group('network')
+storage_parser = parser.add_argument_group('network')
 
 
 #
-# Trinity Globals
+# Globals
 #
 alexandria_parser.add_argument('--version', action='version', version=__version__)
 alexandria_parser.add_argument('-p', '--private-key-seed', type=str, dest='private_key_seed')
@@ -57,6 +57,64 @@ network_parser.add_argument(
     help=(
         "Port to listen for incoming connections."
     ),
+)
+
+#
+# Skip Graph and Kademlia Config
+#
+kademlia_parser.add_argument(
+    '--can-initialize-network-skip-graph',
+    action="store_true",
+    default=False,
+    help="Allow this node to seed the network skip graph",
+    dest="can_initialize_network_skip_graph",
+)
+kademlia_parser.add_argument(
+    '--lookup-interval',
+    type=int,
+    help="The number of seconds between kademlia lookups to expand the routing table",
+    dest="lookup_interval",
+)
+kademlia_parser.add_argument(
+    '--ping-interval',
+    type=int,
+    help="The number of seconds between sending intermittent pings to nodes on the routing table",
+    dest="ping_interval",
+)
+kademlia_parser.add_argument(
+    '--announce-interval',
+    type=int,
+    help="The number of seconds between content advertisements",
+    dest="announce_interval",
+)
+
+
+#
+# Storage
+#
+storage_parser.add_argument(
+    '--ephemeral-db-size',
+    type=int,
+    help="The number of bytes to allocate to ephemeral storage",
+    dest="ephemeral_db_size",
+)
+storage_parser.add_argument(
+    '--ephemeral-index-size',
+    type=int,
+    help="The number of items to hold in the ephemeral index",
+    dest="ephemeral_index_size",
+)
+storage_parser.add_argument(
+    '--cache-db-size',
+    type=int,
+    help="The number of bytes to allocate to cache storage",
+    dest="cache_db_size",
+)
+storage_parser.add_argument(
+    '--cache-index-size',
+    type=int,
+    help="The number of items to hold in the cache index",
+    dest="cache_index_size",
 )
 
 
