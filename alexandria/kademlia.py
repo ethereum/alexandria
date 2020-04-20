@@ -345,27 +345,30 @@ class Kademlia(Service, KademliaAPI):
                     )
 
     async def _handle_insert_requests(self) -> None:
-        async with self.client.message_dispatcher.subscribe(GraphInsert) as subscription:
-            async for request in subscription:
-                self.logger.debug("handling request: %s", request)
-                # Acknowledge the request first, then do the linking.
-                await self.client.send_graph_inserted(
-                    request.node,
-                    request_id=request.payload.request_id,
-                )
-                if not self._network_graph_ready.is_set():
-                    continue
+        async def do_graph_insert(key: Key) -> None:
+            try:
+                await self.graph.insert(key)
+            except AlreadyPresent:
+                pass
+            except Exception:
+                self.logger.exception("Error inserting key: %s", key)
+            else:
+                self.logger.info('%s: Inserted %s', self.client.local_node, key)
 
-                key = content_key_to_graph_key(request.payload.key)
-                try:
-                    await self.graph.insert(key)
-                except AlreadyPresent:
-                    pass
-                except Exception:
-                    self.logger.exception("Error inserting key: %s", key)
-                    continue
-                else:
-                    self.logger.info('%s: Inserted %s', self.client.local_node, key)
+        async with trio.open_nursery() as nursery:
+            async with self.client.message_dispatcher.subscribe(GraphInsert) as subscription:
+                async for request in subscription:
+                    self.logger.debug("handling request: %s", request)
+                    # Acknowledge the request first, then do the linking.
+                    await self.client.send_graph_inserted(
+                        request.node,
+                        request_id=request.payload.request_id,
+                    )
+                    if not self._network_graph_ready.is_set():
+                        continue
+
+                    key = content_key_to_graph_key(request.payload.key)
+                    nursery.start_soon(do_graph_insert, key)
 
     async def _handle_delete_requests(self) -> None:
         async with self.client.message_dispatcher.subscribe(GraphDelete) as subscription:
@@ -511,6 +514,20 @@ class Kademlia(Service, KademliaAPI):
                 else:
                     self.graph_db.set(key, sg_node)
 
+            if not self.graph_db.has(key):
+                with trio.move_on_after(TRAVERSAL_TIMEOUT):
+                    sg_node = await self.network.get_node(key)
+                    traversal_result = await get_traversal_result(
+                        self.network,
+                        self.graph_db,
+                        sg_node,
+                        max_traversal_distance=10,
+                    )
+                    if traversal_result.is_valid:
+                        self.graph_db.set(key, sg_node)
+                    else:
+                        self.logger.info("GOT INVALID NODE: %s -> %s", sg_node, traversal_result)
+
             with trio.move_on_after(2 * INSERT_TIMEOUT):
                 await self.network.insert(key)
 
@@ -575,9 +592,14 @@ class Kademlia(Service, KademliaAPI):
             data=data,
             node_id=node.node_id,
         )
+
+        already_has_key = self.content_manager.has_key(bundle.key)  # noqa: W601
         self.content_manager.ingest_content(bundle)
-        if bundle.data:
-            self.advertise_queue.enqueue(key, queue_at=0.0)
+        if self.content_manager.has_key(bundle.key):  # noqa: W601
+            if already_has_key:
+                self.advertise_queue.enqueue(key)
+            else:
+                self.advertise_queue.enqueue(key, queue_at=0.0)
 
     async def _handle_content_ingestion(self,
                                         receive_channel: trio.abc.ReceiveChannel[Tuple[Node, bytes]],  # noqa: E501

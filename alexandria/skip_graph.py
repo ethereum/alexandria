@@ -525,6 +525,10 @@ class TraversalResult:
             return f"TraversalResult[node={self.node} score={self.score} results={self._traversal_result}]"  # noqa: E501
 
     @property
+    def is_valid(self) -> bool:
+        return not self.is_faulty
+
+    @property
     def is_faulty(self) -> bool:
         if not self._traversal_result:
             return False

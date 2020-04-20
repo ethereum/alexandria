@@ -35,6 +35,7 @@ class TimeQueue(TimeQueueAPI[TKey]):
         self._queue = collections.deque()
         self._key_queue_times = {}
         self._has_content = trio.Event()
+        self._queue_changed = trio.Event()
         self._incubation_seconds = incubation_seconds
 
     def enqueue(self, key: TKey, queue_at: float = None) -> None:
@@ -63,17 +64,49 @@ class TimeQueue(TimeQueueAPI[TKey]):
         bisect.insort_right(self._queue, QueueItem(key, queue_at))
         self._key_queue_times[key] = queue_at
         self._has_content.set()
+        self._queue_changed.set()
+        self._queue_changed = trio.Event()
 
     def get_wait_time(self) -> float:
         delta = time.monotonic() - self._queue[0].queued_at
         return max(0.0, self._incubation_seconds - delta)
 
+    async def _do_delay_wait(self,
+                             delay: float,
+                             send_channel: trio.abc.SendChannel[None]) -> None:
+        await trio.sleep(delay)
+        async with send_channel:
+            await send_channel.send(None)
+
+    async def _do_wait_queue_changed(self,
+                                     send_channel: trio.abc.SendChannel[None]) -> None:
+        await self._queue_changed.wait()
+        async with send_channel:
+            await send_channel.send(None)
+
+    async def _wait_delay_or_queue_changed(self) -> None:
+        delay = self.get_wait_time()
+
+        if delay <= 0.0:
+            await trio.hazmat.checkpoint()
+            return
+
+        while delay > 0.0:
+            send_channel, receive_channel = trio.open_memory_channel[None](0)
+
+            async with trio.open_nursery() as nursery:
+                nursery.start_soon(self._do_delay_wait, delay, send_channel)
+                nursery.start_soon(self._do_wait_queue_changed, send_channel)
+                async with receive_channel:
+                    await receive_channel.receive()
+                nursery.cancel_scope.cancel()
+
+            delay = self.get_wait_time()
+
     async def pop_next(self) -> TKey:
         await self._has_content.wait()
 
-        delay = self.get_wait_time()
-        if delay > 0:
-            await trio.sleep(delay)
+        await self._wait_delay_or_queue_changed()
 
         to_advertise = self._queue.popleft()
         self._key_queue_times.pop(to_advertise.key)

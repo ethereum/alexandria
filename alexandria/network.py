@@ -295,7 +295,7 @@ class Network(NetworkAPI):
     async def get_introduction(self, node: Node) -> Tuple[SGNodeAPI, ...]:
         response = await self.client.get_graph_introduction(node)
         return tuple(
-            node.to_sg_node() for node in response.payload.nodes
+            cursor.to_sg_node() for cursor in response.payload.nodes
         )
 
     async def get_graph_node(self, node: Node, *, key: Key) -> SGNodeAPI:
@@ -351,12 +351,16 @@ class Network(NetworkAPI):
                 await self.client.graph_insert(location, key=key)
 
         content_key = graph_key_to_content_key(key)
+        content_id = content_key_to_node_id(content_key)
 
         locations = await self.locations(content_key)
+        nodes_near_content_id = await self.iterative_lookup(content_id)
 
         async with trio.open_nursery() as nursery:
             for location in locations:
                 nursery.start_soon(do_insert, location)
+            for node in nodes_near_content_id:
+                nursery.start_soon(do_insert, node)
 
     async def delete(self, key: Key) -> None:
         async def do_delete(location: Node) -> None:
