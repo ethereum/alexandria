@@ -533,12 +533,12 @@ class TraversalResult:
     @property
     def score(self) -> float:
         if self.is_faulty:
-            return 1.0
-        return sum(
+            return 0.0
+        return max(1.0, sum(
             (len(left_result) + len(right_result)) / (level + 1)
             for level, (left_result, right_result)
             in enumerate(self._traversal_result)
-        )
+        ))
 
     @property
     def fault_ratio(self) -> float:
