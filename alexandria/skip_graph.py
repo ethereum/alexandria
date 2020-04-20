@@ -533,7 +533,7 @@ class TraversalResult:
     @property
     def score(self) -> float:
         if self.is_faulty:
-            return 0.0
+            return 1.0
         return sum(
             (len(left_result) + len(right_result)) / (level + 1)
             for level, (left_result, right_result)

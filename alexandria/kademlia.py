@@ -314,6 +314,7 @@ class Kademlia(Service, KademliaAPI):
                     "Failed to initialize Skip Graph. All introductions were faulty: %s",
                     tuple(str(result) for result in introduction_results),
                 )
+                await trio.sleep(5)
 
     async def _initialize_skip_graph(self) -> None:
         # 1. Get an introduction to the network's SkipGraph
