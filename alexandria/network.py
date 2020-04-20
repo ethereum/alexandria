@@ -129,6 +129,7 @@ class Network(NetworkAPI):
                 if len(found_nodes) == 0:
                     unresponsive_node_ids.add(peer.node_id)
                 else:
+                    received_nodes[peer.node_id].add(peer.endpoint)
                     for node in found_nodes:
                         received_nodes[node.node_id].add(node.endpoint)
 
@@ -218,18 +219,23 @@ class Network(NetworkAPI):
                     )
                 else:
                     for location in locations:
+                        if location.node_id == self.client.local_node_id:
+                            continue
                         await send_channel.send(location)
 
+        nodes_to_ask = await self.iterative_lookup(content_id)
         async with trio.open_nursery() as nursery:
             async with send_channel:
-                for node in await self.iterative_lookup(content_id):
+                for node in nodes_to_ask:
                     nursery.start_soon(do_get_locations, node, send_channel.clone())
 
             async with receive_channel:
-                return tuple(set([
+                locations = tuple(set([
                     location async for location in receive_channel
-                    if location.node_id != self.client.local_node_id
                 ]))
+
+        self.logger.debug("Found %d locations for %r:%d", len(locations), key, content_id)
+        return locations
 
     #
     # Content Management
@@ -271,23 +277,16 @@ class Network(NetworkAPI):
         return data
 
     async def get_content(self, key: bytes) -> bytes:
-        content_id = content_key_to_node_id(key)
-        nodes_near_content = await self.iterative_lookup(content_id)
-        queried: Set[NodeID] = set()
+        content_locations = await self.locations(key)
 
-        for node in nodes_near_content:
-            for location in await self.locate(node, key=key):
-                if location.node_id in queried:
-                    continue
-                queried.add(location.node_id)
-                try:
-                    return await self.retrieve(node, key=key)
-                except ContentNotFound:
-                    continue
+        for location in content_locations:
+            try:
+                return await self.retrieve(location, key=key)
+            except ContentNotFound:
+                continue
         else:
-            raise NotFound(
-                f"Could not find node after querying {len(queried)} "
-                f"locations provided by {len(nodes_near_content)} nodes"
+            raise ContentNotFound(
+                f"Could not find node after querying {len(content_locations)} nodes"
             )
 
     #
@@ -332,7 +331,11 @@ class Network(NetworkAPI):
                 async with send_channel:
                     await send_channel.send(node)
             else:
-                self.logger.info("Discarding retrieved node that failed filter function: %s", node)
+                self.logger.debug(
+                    "Discarding graph node %s from node %s that failed filter function",
+                    node,
+                    location,
+                )
 
         async with trio.open_nursery() as nursery:
             locations = await self.locations(content_key)

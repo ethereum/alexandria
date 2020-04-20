@@ -26,7 +26,7 @@ from alexandria.messages import default_registry
 
 
 def get_random_request_id() -> int:
-    return secrets.randbits(16)
+    return secrets.randbits(32)
 
 
 MAX_REQUEST_ID_ATTEMPTS = 3

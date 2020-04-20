@@ -12,9 +12,10 @@ from typing import (
 )
 
 from eth_utils import int_to_big_endian, ValidationError
+from eth_utils.toolz import cons
 import trio
 
-from alexandria._utils import content_key_to_node_id, graph_key_to_content_key
+from alexandria._utils import content_key_to_node_id, graph_key_to_content_key, gather
 from alexandria.abc import (
     Direction,
     SGNodeAPI,
@@ -502,10 +503,8 @@ class NetworkGraph(BaseGraph):
 #
 # Graph Fault Utilities
 #
-RawTraversalResult = Tuple[
-    Tuple[Optional[Key], ...],
-    Tuple[Optional[Key], ...],
-]
+LevelResult = Tuple[Optional[int], ...]
+RawTraversalResult = Tuple[LevelResult, LevelResult]
 
 
 NON_FAULTY_TERMINALS = {None, ...}
@@ -551,7 +550,11 @@ class TraversalResult:
         return num_faults / num_results
 
 
+logger = logging.getLogger('alexandria.skip_graph.traversal')
+
+
 TraversalResults = Tuple[TraversalResult, ...]
+TraversalCache = Dict[Tuple[Node, Key], SGNodeAPI]
 
 
 def _ends_with_fault(traversal_result: TraversalResult) -> bool:
@@ -561,33 +564,48 @@ def _ends_with_fault(traversal_result: TraversalResult) -> bool:
 
 
 async def get_traversal_result(network,
+                               graph_db: GraphDatabaseAPI,
                                cursor: SGNodeAPI,
                                max_traversal_distance: int,
                                ) -> TraversalResult:
-    raw_results = tuple([
-        result async for result in traverse_neighbor_links(network, cursor, max_traversal_distance)
-    ])
+    raw_results = await traverse_neighbor_links(network, graph_db, cursor, max_traversal_distance)
     return TraversalResult(cursor, raw_results)
 
 
 async def traverse_neighbor_links(network,
+                                  graph_db: GraphDatabaseAPI,
                                   cursor: SGNodeAPI,
                                   max_traversal_distance: int,
-                                  ) -> AsyncIterator[TraversalResult]:
+                                  ) -> Tuple[RawTraversalResult, ...]:
     """
     Perform a breadth first walk through the graph until the first fault
     """
-    for level in range(cursor.max_level):
-        left_neighbor_keys = await scan_level(network, cursor, level, LEFT, max_traversal_distance)
-        right_neighbor_keys = await scan_level(network, cursor, level, RIGHT, max_traversal_distance)  # noqa: E501
-        yield left_neighbor_keys, right_neighbor_keys
+    cache: TraversalCache = {}
+    return await gather(*(
+        (scan_level, network, graph_db, cursor, level, max_traversal_distance, cache)
+        for level in range(cursor.max_level)
+    ))
 
 
 async def scan_level(network: NetworkAPI,
+                     graph_db: GraphDatabaseAPI,
                      cursor: SGNodeAPI,
                      level: int,
-                     direction: Direction,
-                     max_traversal_distance: int) -> Optional[int]:
+                     max_traversal_distance: int,
+                     cache: TraversalCache) -> RawTraversalResult:
+    return await gather(
+        (scan_level_in_direction, network, graph_db, cursor, level, LEFT, max_traversal_distance, cache),  # noqa: E501
+        (scan_level_in_direction, network, graph_db, cursor, level, RIGHT, max_traversal_distance, cache),  # noqa: E501
+    )
+
+
+async def scan_level_in_direction(network: NetworkAPI,
+                                  graph_db: GraphDatabaseAPI,
+                                  cursor: SGNodeAPI,
+                                  level: int,
+                                  direction: Direction,
+                                  max_traversal_distance: int,
+                                  cache: TraversalCache) -> Tuple[Optional[int], ...]:
     neighbor_key = cursor.get_neighbor(level, direction)
     if neighbor_key is None:
         # Terminal: End of list at this level
@@ -595,9 +613,10 @@ async def scan_level(network: NetworkAPI,
 
     # All versions of the node for the given neighbor_key that we can find
     # on the network.
-    neighbor_candidates = await get_node_versions(network, neighbor_key)
+    neighbor_candidates = await get_node_versions(network, graph_db, neighbor_key, cache)
     if not neighbor_candidates:
         # Terminal: Neighbor key unretrievable from network
+        logger.debug('%s: TERMINAL: not-found: %s', network.client.local_node, neighbor_key)
         return (neighbor_key,)
 
     # Filter those down to only the ones that share the reflexive
@@ -610,6 +629,7 @@ async def scan_level(network: NetworkAPI,
     if not neighbors:
         # Terminal: None of the neighbor candidates at this level are
         # reflexively linked.
+        logger.debug('%s, TERMINAL: non-reflexive: %s', network.client.local_node, neighbor_key)
         return (neighbor_key,)
 
     if max_traversal_distance == 1:
@@ -619,10 +639,19 @@ async def scan_level(network: NetworkAPI,
         raise Exception("Invariant")
 
     neighbor_scan_results = []
-    for neighbor in neighbors:
-        # TODO: concurrency
-        scan_result = await scan_level(network, neighbor, level, direction, max_traversal_distance - 1)  # noqa: E501
-        neighbor_scan_results.append(scan_result)
+    neighbor_scan_results = await gather(*(
+        (
+            scan_level_in_direction,
+            network,
+            graph_db,
+            neighbor,
+            level,
+            direction,
+            max_traversal_distance - 1,
+            cache,
+        )
+        for neighbor in neighbors
+    ))
 
     neighbor_scan_results_by_length = sorted(
         neighbor_scan_results,
@@ -634,7 +663,9 @@ async def scan_level(network: NetworkAPI,
 
 
 async def get_node_versions(network: NetworkAPI,
-                            key: Key) -> Tuple[SGNodeAPI, ...]:
+                            graph_db: GraphDatabaseAPI,
+                            key: Key,
+                            cache: TraversalCache) -> Tuple[SGNodeAPI, ...]:
     content_key = graph_key_to_content_key(key)
 
     send_channel, receive_channel = trio.open_memory_channel[SGNodeAPI](2048)  # too big...
@@ -642,21 +673,35 @@ async def get_node_versions(network: NetworkAPI,
     async def do_get_graph_node(location: Node, send_channel: trio.abc.SendChannel[Node]):
         if location.node_id == network.client.local_node_id:
             return
+
+        if (location, key) in cache:
+            async with send_channel:
+                await send_channel.send(cache[(location, key)])
+            return
+
         with trio.move_on_after(GET_GRAPH_NODE_TIMEOUT):
             try:
                 node = await network.get_graph_node(location, key=key)
             except NotFound:
                 pass
             else:
+                cache[(location, key)] = node
                 async with send_channel:
                     await send_channel.send(node)
 
+    content_locations = await network.locations(content_key)
     async with trio.open_nursery() as nursery:
         async with send_channel:
-            for location in await network.locations(content_key):
+            for location in content_locations:
                 nursery.start_soon(do_get_graph_node, location, send_channel.clone())
 
         async with receive_channel:
             nodes = tuple([node async for node in receive_channel])
+
+    # Include the versions from our local database as well...
+    try:
+        nodes = tuple(cons(graph_db.get(key), nodes))
+    except KeyError:
+        pass
 
     return nodes

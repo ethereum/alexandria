@@ -18,7 +18,7 @@ NODE_SEDES = sedes.Container((
 
 class Ping(sedes.Serializable):  # type: ignore
     fields = (
-        ('request_id', sedes.uint16),
+        ('request_id', sedes.uint32),
     )
 
     request_id: int
@@ -29,7 +29,7 @@ class Ping(sedes.Serializable):  # type: ignore
 
 class Pong(sedes.Serializable):  # type: ignore
     fields = (
-        ('request_id', sedes.uint16),
+        ('request_id', sedes.uint32),
     )
 
     request_id: int
@@ -40,7 +40,7 @@ class Pong(sedes.Serializable):  # type: ignore
 
 class FindNodes(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("distance", sedes.uint16),
     )
 
@@ -53,7 +53,7 @@ class FindNodes(sedes.Serializable):  # type: ignore
 
 class FoundNodes(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("total", sedes.uint8),
         ("nodes", sedes.List(NODE_SEDES, max_length=2**32))
     )
@@ -68,7 +68,7 @@ class FoundNodes(sedes.Serializable):  # type: ignore
 
 class Advertise(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("key", byte_list),
         ("node", NODE_SEDES),
         # TODO: this should have a signature
@@ -80,7 +80,7 @@ class Advertise(sedes.Serializable):  # type: ignore
 
 class Ack(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
     )
 
     request_id: int
@@ -88,7 +88,7 @@ class Ack(sedes.Serializable):  # type: ignore
 
 class Locate(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("key", byte_list),
     )
 
@@ -98,7 +98,7 @@ class Locate(sedes.Serializable):  # type: ignore
 
 class Locations(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("total", sedes.uint16),
         ("nodes", sedes.List(NODE_SEDES, max_length=2**32))
     )
@@ -110,7 +110,7 @@ class Locations(sedes.Serializable):  # type: ignore
 
 class Retrieve(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("key", byte_list),
     )
 
@@ -120,15 +120,15 @@ class Retrieve(sedes.Serializable):  # type: ignore
 
 class Chunk(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("total", sedes.uint16),
         ("index", sedes.uint16),
         ("data", byte_list),
     )
 
     request_id: int
-    total: sedes.uint16
-    index: sedes.uint16
+    total: int
+    index: int
     data: bytes
 
 
@@ -173,7 +173,7 @@ class SkipGraphNode(sedes.Serializable):  # type: ignore
 
 class GraphGetIntroduction(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
     )
 
     request_id: int
@@ -181,7 +181,7 @@ class GraphGetIntroduction(sedes.Serializable):  # type: ignore
 
 class GraphIntroduction(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("nodes", sedes.List(SkipGraphNode, max_length=2**32)),
     )
 
@@ -191,7 +191,7 @@ class GraphIntroduction(sedes.Serializable):  # type: ignore
 
 class GraphGetNode(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("key", byte_list),
     )
 
@@ -201,7 +201,7 @@ class GraphGetNode(sedes.Serializable):  # type: ignore
 
 class GraphNode(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("node", Maybe(SkipGraphNode)),
     )
 
@@ -211,7 +211,7 @@ class GraphNode(sedes.Serializable):  # type: ignore
 
 class GraphInsert(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("key", byte_list),
     )
 
@@ -221,7 +221,7 @@ class GraphInsert(sedes.Serializable):  # type: ignore
 
 class GraphInserted(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
     )
 
     request_id: int
@@ -229,7 +229,7 @@ class GraphInserted(sedes.Serializable):  # type: ignore
 
 class GraphDelete(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
         ("key", byte_list),
     )
 
@@ -239,7 +239,7 @@ class GraphDelete(sedes.Serializable):  # type: ignore
 
 class GraphDeleted(sedes.Serializable):  # type: ignore
     fields = (
-        ("request_id", sedes.uint16),
+        ("request_id", sedes.uint32),
     )
 
     request_id: int

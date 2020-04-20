@@ -27,7 +27,18 @@ def base_db_path():
 
 @pytest.fixture
 async def bootnode(base_db_path):
-    config = KademliaConfig(can_initialize_network_skip_graph=True)
+    config = KademliaConfig(
+        LOOKUP_INTERVAL=20,
+        ANNOUNCE_INTERVAL=30,
+        ANNOUNCE_CONCURRENCY=1,
+        storage_config=StorageConfig(
+            ephemeral_storage_size=1024,
+            ephemeral_index_size=500,
+            cache_storage_size=1024,
+            cache_index_size=100
+        ),
+        can_initialize_network_skip_graph=True,
+    )
     durable_db = make_durable_db(base_db_path / f"bootnode")
 
     bootnode = ApplicationFactory(
@@ -45,7 +56,7 @@ def make_durable_db(db_path):
     db_path.mkdir(parents=True, exist_ok=True)
     db = DurableDB(db_path)
 
-    for _ in range(32):
+    for _ in range(4):
         content_id = random.randint(0, 65535)
         key = b'k%d' % content_id
         value = b'v%d' % content_id
@@ -80,7 +91,7 @@ async def test_application(bootnode, base_db_path):
     )
 
     async with AsyncExitStack() as stack:
-        for i in range(1):
+        for i in range(16):
             # small delay between starting each client.
             await trio.sleep(random.random())
             # content database
